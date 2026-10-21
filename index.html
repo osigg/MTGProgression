@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Progression Pack Opener</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Alegreya+SC:wght@500;700&family=Source+Sans+3:wght@400;600;700&family=IBM+Plex+Mono:wght@400;600&display=swap">
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+<header class="top">
+  <div class="wrap">
+    <div class="brand">
+      <div>
+        <h1>Progression Pack Opener</h1>
+        <div class="sub">4-player Commander, 1993 to 1999. Real booster collation for every set on the round sheet.</div>
+      </div>
+      <div class="who" id="who"></div>
+    </div>
+    <nav class="tabs" role="tablist" id="tabs" hidden>
+      <button role="tab" data-tab="open" aria-selected="true">Open packs</button>
+      <button role="tab" data-tab="collection" aria-selected="false">Collections</button>
+      <button role="tab" data-tab="deck" aria-selected="false">Deck check</button>
+      <button role="tab" data-tab="history" aria-selected="false">History</button>
+      <button role="tab" data-tab="table" aria-selected="false">Players &amp; bans</button>
+    </nav>
+  </div>
+</header>
+
+<main class="wrap">
+  <div id="banner"></div>
+  <section id="view-gate"><div class="empty"><b>Loading…</b></div></section>
+  <section id="view-open" hidden></section>
+  <section id="view-collection" hidden></section>
+  <section id="view-deck" hidden></section>
+  <section id="view-history" hidden></section>
+  <section id="view-table" hidden></section>
+</main>
+
+<div class="drawer" id="drawer" hidden></div>
+<div class="toast" id="toast" hidden></div>
+
+<script type="module" src="js/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,60 @@
+rules_version = '2';
+// Paste this whole file into Firebase console > Firestore Database > Rules, then Publish.
+// If you change the admin, change the email here AND in js/firebase-config.js.
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function signedIn() { return request.auth != null; }
+    function isAdmin() {
+      return signedIn()
+        && request.auth.token.email == 'owensigg@gmail.com'
+        && request.auth.token.email_verified == true;
+    }
+    function unlockedRound() {
+      return get(/databases/$(database)/documents/config/settings).data.unlockedRound;
+    }
+
+    // Round unlock + ban list. Everyone signed in reads, only the admin writes.
+    match /config/{docId} {
+      allow read: if signedIn();
+      allow write: if isAdmin();
+    }
+
+    // One profile per Google account, keyed by the account's uid.
+    match /players/{uid} {
+      allow read: if signedIn();
+      allow create, update: if isAdmin() || (
+        signedIn() && request.auth.uid == uid
+        && request.resource.data.keys().hasOnly(['name', 'created'])
+        && request.resource.data.name is string
+        && request.resource.data.name.size() > 0
+        && request.resource.data.name.size() <= 40
+      );
+      allow delete: if isAdmin();
+    }
+
+    // Every opening and shared-pool pick. Players create their own, never edit or delete.
+    match /pulls/{pullId} {
+      allow read: if signedIn();
+      allow create: if isAdmin() || (
+        signedIn()
+        && request.resource.data.player == request.auth.uid
+        && request.resource.data.voided == false
+        && (
+          // A round's packs: only unlocked rounds, and the fixed id means once per round.
+          (request.resource.data.kind == 'packs'
+            && request.resource.data.round is int
+            && request.resource.data.round >= 1
+            && request.resource.data.round <= unlockedRound()
+            && pullId == request.auth.uid + '_r' + string(request.resource.data.round))
+          ||
+          // Shared-pool picks the player enters themselves.
+          (request.resource.data.kind == 'pool'
+            && pullId.matches(request.auth.uid + '_pool_.*'))
+        )
+      );
+      // Voiding, restoring and corrections are admin only.
+      allow update, delete: if isAdmin();
+    }
+  }
+}
