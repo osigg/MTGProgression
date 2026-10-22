@@ -49,6 +49,12 @@ Hosting is GitHub Pages (free). Data and sign-in are Firebase on the free Spark 
 - Shared-pool picks go in **Open packs > Shared pool**, one per line with an edition: `Sol Ring (2ed) 270`.
 - Bans go in **Players & bans > Ban list**. Collections and deck checks flag banned cards.
 
+## Opening, stats and targets
+- **Reveal**: choose *One pack at a time* (Next / Previous / Skip to all) or *All at once*. Either way, every pack is saved the moment you click Open, so closing the tab mid-reveal can't re-roll anything. The choice is remembered per browser.
+- **What to expect** (Open packs tab): for each set in the round, the real pack layout, how often a pack holds 0, 1 or 2 rares, and the target cards with their odds, marked *Owned* if you already have one.
+- **Stats tab**: per round or across all rounds, each player's packs, rares and targets as *actual / expected*, a luck score (targets hit vs. expected), legendary creatures and best pull, plus a list of every target pulled and a round checklist showing who owns each target.
+- **Targets** are listed per set in `tools/targets.json`. Odds come from simulating 20,000 packs per set on the real print sheets. After editing the list, regenerate the odds with `node tools/odds.js` and push `data/odds.json`.
+
 ## Exporting to Archidekt and Tabletop Simulator
 **Collections > Copy list** gives lines like `1x Force of Will (all) 28`. Paste them into Archidekt's collection import or a new deck. Then export the finished deck from Archidekt or Moxfield and load it into Tabletop Simulator with a deck importer such as [tts-deckconverter](https://github.com/jeandeaual/tts-deckconverter).
 
@@ -69,3 +75,5 @@ Change the email in **both** `js/firebase-config.js` and `firestore.rules`, push
 | `js/firebase-config.js` | Your Firebase project config and the admin email |
 | `firestore.rules` | Database security rules (paste into the Firebase console) |
 | `data/cards.json` | Card text, booster sheets, rarities and collector numbers for all 20 sets |
+| `data/odds.json` | Simulated real-pack odds and target lists (generated) |
+| `tools/targets.json`, `tools/odds.js` | Editable target lists and the script that builds `data/odds.json` |

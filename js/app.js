@@ -3,6 +3,8 @@ import { ADMIN_EMAIL } from "./firebase-config.js";
 
 /* ---------- card data ---------- */
 let CARDS = [], SETS = {}, SET_ORDER = [];
+let ODDS = {packsSimulated:0, sets:{}};   // data/odds.json: real-collation odds per set
+const TARGETS = {};                        // set code -> Set of card indexes worth chasing
 const BY_NAME = new Map();
 const NORM = s => s.normalize("NFKD").replace(/[̀-ͯ]/g,"").replace(/Æ/g,"Ae").replace(/æ/g,"ae").toLowerCase().replace(/\s+/g," ").trim();
 const RANK = {R:0,U:1,C:2,L:3};
@@ -14,6 +16,47 @@ function typeLine(t){ const w=t.split(" "); const a=[], b=[]; let sub=false;
 const isLegend = c => /\bLegendary\b/.test(c.type) && /\bCreature\b/.test(c.type);
 const isBasic = c => /\bBasic\b/.test(c.type) && /\bLand\b/.test(c.type);
 function rarityOf(set, idx){ const s=SETS[set]; return (s && s.rar[idx]) || "C"; }
+const isTargetIdx = (s, i) => !!(TARGETS[s] && TARGETS[s].has(i));
+const RAR_NAME = {R:"rare", U:"uncommon", C:"common", L:"basic land"};
+const oneIn = p => p <= 0 ? "never seen in simulation" : p >= 0.5 ? `${Math.round(p*100)}% per pack` : `1 in ${Math.round(1/p)} packs`;
+
+/* ---------- pack stats ---------- */
+function packStats(packs){
+  const st = {packs:0, cards:0, R:0, U:0, C:0, L:0, targets:[], legends:[], colors:{W:0,U:0,B:0,R:0,G:0,M:0,C:0}};
+  for(const pk of packs){
+    if(!SETS[pk.s]) continue; st.packs++;
+    for(const nm of pk.c){
+      const i = BY_NAME.get(NORM(nm)); st.cards++; if(i===undefined) continue;
+      st[rarityOf(pk.s,i)]++; const c = CARDS[i];
+      if(isTargetIdx(pk.s,i)) st.targets.push({nm, s:pk.s});
+      if(isLegend(c)) st.legends.push({nm, s:pk.s});
+      if(!/\bLand\b/.test(c.type)) st.colors[c.ci.length>1 ? "M" : (c.ci || "C")]++;
+    }
+  }
+  return st;
+}
+// Expected rares and target cards for a list of packs, from the simulated real odds.
+function expectedFor(packs){
+  let R = 0, T = 0;
+  for(const pk of packs){ const o = ODDS.sets[pk.s]; if(!o) continue; R += o.avgPerPack.R; T += o.targets.reduce((a,t)=>a+t.p, 0); }
+  return {R, T};
+}
+const fmt1 = x => (Math.round(x*10)/10).toFixed(1);
+function colorBar(colors){
+  const keys = ["W","U","B","R","G","M","C"]; const total = keys.reduce((a,k)=>a+colors[k],0); if(!total) return "";
+  const label = {W:"White",U:"Blue",B:"Black",R:"Red",G:"Green",M:"Multicolor",C:"Colorless"};
+  return `<div class="colorbar" role="img" aria-label="Color breakdown">${keys.filter(k=>colors[k]).map(k=>`<span class="cb ${k}" style="flex:${colors[k]}" title="${label[k]}: ${colors[k]}"></span>`).join("")}</div>
+    <div class="cblegend">${keys.filter(k=>colors[k]).map(k=>`<span><i class="cb ${k}"></i>${label[k]} ${colors[k]}</span>`).join("")}</div>`;
+}
+function statsHTML(st, exp){
+  const tile = (v, l, sub) => `<div class="stat"><div class="v">${v}</div><div class="l">${l}</div>${sub ? `<div class="s">${sub}</div>` : ""}</div>`;
+  return `<div class="summary">
+      ${tile(st.cards, "Cards", `${st.packs} pack${st.packs===1?"":"s"}`)}
+      ${tile(st.R, "Rares", exp ? `expected ${fmt1(exp.R)}` : "")}
+      ${tile(st.targets.length, "Targets hit", exp ? `expected ${fmt1(exp.T)}` : "")}
+      ${tile(st.legends.length, "Legendary creatures", "")}
+    </div>${colorBar(st.colors)}`;
+}
 
 // Round plan. To add a round: add its sets to data/cards.json and an entry here.
 const ROUNDS = [
@@ -97,7 +140,8 @@ function roundDone(uid, n){ return state.pulls.some(p => p.player===uid && p.kin
 const ui = { tab:"open", player:null, round:1, branch:{}, split:4, throwback:"leg", extraSet:"2ed", extraCount:1, poolText:"", poolRound:1,
   lastOpen:null, colPlayer:null, f:{q:"", colors:new Set(), type:"", rarity:"", set:"", cmd:"", hideBasics:true}, sort:"name",
   deckPlayer:null, deckText:"", deckCmd:"", deckResult:null, histOpen:new Set(), voidConfirm:null, removeConfirm:null, banDraft:null,
-  busy:false, checks:null };
+  busy:false, checks:null, revealIdx:0, revealDone:false, statsRound:null,
+  revealMode: (() => { try { return localStorage.getItem("ppo-reveal") || "one"; } catch(e){ return "one"; } })() };
 
 function ensureSelections(){
   const ids = state.players.map(p=>p.id); const mine = state.me && ids.includes(state.me.uid) ? state.me.uid : ids[0] || null;
@@ -183,7 +227,9 @@ function renderOpen(){
         ${R ? `<p class="small"><b>Round ${R.n}: ${esc(R.title)}</b> <span class="muted">(${R.years})</span></p>` : ""}
       </div>
       ${planHTML}
-      <p class="small muted">Opening saves straight to the collection and the History tab. Each player gets one opening per round.</p>
+      ${typeof ui.round==="number" || ui.round==="extra" ? `<div class="stack"><h3>Reveal</h3><div class="seg"><button data-reveal="one" aria-pressed="${ui.revealMode==="one"}">One pack at a time</button><button data-reveal="all" aria-pressed="${ui.revealMode==="all"}">All at once</button></div></div>` : ""}
+      ${typeof ui.round==="number" || ui.round==="extra" ? expectHTML(planFor()) : ""}
+      <p class="small muted">Opening saves every pack straight to the collection and the History tab, even when you reveal them one at a time. Each player gets one opening per round.</p>
     </div>
     <div class="stack">${resultHTML()}</div>
   </div>`;
@@ -193,23 +239,60 @@ function resultHTML(){
   if(!L){
     const recent = [...state.pulls].reverse().find(p => !p.voided && p.kind==="packs");
     if(recent) return `<div class="empty"><b>Ready to open.</b><br>Last opening: ${esc(playerName(recent.player))}, ${esc(recent.label)} on ${esc(fmtDate(recent.created))}. Every pack is in History.</div>`;
-    return `<div class="empty"><b>No packs opened yet.</b><br>Choose your branch and open. Packs appear here, rares first.</div>`;
+    return `<div class="empty"><b>No packs opened yet.</b><br>Choose your branch and open. ${ui.revealMode==="one" ? "Packs are revealed one at a time." : "All packs appear at once, rares first."}</div>`;
   }
-  const all = L.packs.flatMap(pk => pk.c.map(nm => ({nm, s:pk.s})));
-  const rares = all.filter(x => { const i=BY_NAME.get(NORM(x.nm)); return i!==undefined && rarityOf(x.s,i)==="R"; });
-  const legends = all.filter(x => { const i=BY_NAME.get(NORM(x.nm)); return i!==undefined && isLegend(CARDS[i]); });
-  return `<div><h2>${esc(playerName(L.player))} · ${esc(L.label)}</h2><p class="small muted">${L.packs.length} packs · saved ${esc(fmtDate(L.created))}</p></div>
-    <div class="summary"><div class="stat"><div class="v">${all.length}</div><div class="l">Cards</div></div><div class="stat"><div class="v">${rares.length}</div><div class="l">Rares</div></div><div class="stat"><div class="v">${legends.length}</div><div class="l">Legendary creatures</div></div></div>
-    ${legends.length ? `<div class="note"><b>Commander options pulled:</b> ${legends.map(x => `<button class="link" data-card="${esc(x.nm)}" data-set="${esc(x.s)}">${esc(x.nm)}</button>`).join(", ")}</div>` : ""}
+  const N = L.packs.length;
+  const oneByOne = ui.revealMode === "one" && !ui.revealDone;
+  const upto = oneByOne ? Math.min(ui.revealIdx, N-1) : N-1;
+  const shown = L.packs.slice(0, upto+1);
+  const st = packStats(shown); const exp = expectedFor(shown);
+  const head = `<div><h2>${esc(playerName(L.player))} · ${esc(L.label)}</h2><p class="small muted">${N} packs · saved ${esc(fmtDate(L.created))}${oneByOne ? ` · stats so far cover ${upto+1} of ${N}` : ""}</p></div>`;
+  const hits = st.targets.length ? `<div class="note target-note"><b>Targets pulled:</b> ${st.targets.map(x => `<button class="link" data-card="${esc(x.nm)}" data-set="${esc(x.s)}">${esc(x.nm)}</button>`).join(", ")}</div>` : "";
+  const legends = st.legends.length ? `<div class="note"><b>Commander options:</b> ${st.legends.map(x => `<button class="link" data-card="${esc(x.nm)}" data-set="${esc(x.s)}">${esc(x.nm)}</button>`).join(", ")}</div>` : "";
+  if(oneByOne){
+    const pk = L.packs[upto];
+    return `${head}
+      <div class="reveal">
+        <div class="row" style="justify-content:space-between">
+          <b class="revcount">Pack ${upto+1} of ${N}</b>
+          <div class="row"><button class="btn" id="revPrev" ${upto===0?"disabled":""}>Previous</button>
+          ${upto < N-1 ? `<button class="btn primary" id="revNext">Open next pack</button>` : `<button class="btn primary" id="revDone">See all ${N} packs</button>`}
+          <button class="btn" id="revAll">Skip to all</button></div>
+        </div>
+        <div class="progress" aria-hidden="true"><span style="width:${((upto+1)/N*100).toFixed(1)}%"></span></div>
+        ${packHTML(pk, upto, true)}
+      </div>
+      ${statsHTML(st, exp)}${hits}${legends}`;
+  }
+  return `${head}${statsHTML(st, exp)}${hits}${legends}
     <div class="packs">${L.packs.map((pk,i) => packHTML(pk,i)).join("")}</div>`;
 }
-function packHTML(pk, i){
+function packHTML(pk, i, big){
   const set = SETS[pk.s];
-  return `<article class="pack" style="animation-delay:${Math.min(i,20)*40}ms"><header><b>${esc(set ? set.name : pk.s ? pk.s.toUpperCase() : "Pool pick")}</b><span class="muted">${set ? `Pack ${i+1} · ` : ""}${pk.c.length} card${pk.c.length>1?"s":""}</span></header><ol>${pk.c.map(nm => cardRow(nm, pk.s)).join("")}</ol></article>`;
+  const st = set ? packStats([pk]) : null;
+  const line = st ? [st.R ? `${st.R} rare${st.R>1?"s":""}` : "no rare", `${st.U} unc`, st.targets.length ? `<b class="tgt">${st.targets.length} target${st.targets.length>1?"s":""}</b>` : ""].filter(Boolean).join(" · ") : `${pk.c.length} card${pk.c.length>1?"s":""}`;
+  return `<article class="pack ${big?"big":""} ${st && st.targets.length ? "has-target" : ""}" style="animation-delay:${big?0:Math.min(i,20)*40}ms"><header><b>${esc(set ? set.name : pk.s ? pk.s.toUpperCase() : "Pool pick")}</b><span class="muted">${set ? `#${i+1} · ` : ""}${line}</span></header><ol>${pk.c.map(nm => cardRow(nm, pk.s)).join("")}</ol></article>`;
 }
 function cardRow(nm, s){
   const i = BY_NAME.get(NORM(nm)); const c = i!==undefined ? CARDS[i] : null; const r = c && s && SETS[s] ? rarityOf(s,i) : "C";
-  return `<li class="cardrow ${r}"><span class="rar ${r}" title="${r==="R"?"Rare":r==="U"?"Uncommon":r==="L"?"Basic land":"Common"}"></span><span class="nm"><button class="link" style="color:inherit" data-card="${esc(nm)}" data-set="${esc(s||"")}">${esc(nm)}</button>${c && isLegend(c) ? '<span class="legend-tag">Legend</span>' : ""}</span>${c ? manaHTML(c.mana) : ""}</li>`;
+  const tgt = c && isTargetIdx(s, i);
+  return `<li class="cardrow ${r} ${tgt?"T":""}"><span class="rar ${r}" title="${r==="R"?"Rare":r==="U"?"Uncommon":r==="L"?"Basic land":"Common"}"></span><span class="nm"><button class="link" style="color:inherit" data-card="${esc(nm)}" data-set="${esc(s||"")}">${esc(nm)}</button>${tgt ? '<span class="target-tag">Target</span>' : ""}${c && isLegend(c) ? '<span class="legend-tag">Legend</span>' : ""}</span>${c ? manaHTML(c.mana) : ""}</li>`;
+}
+// "What's in these packs": real odds plus the target list for each set in a plan.
+function expectHTML(slots){
+  const own = ui.player ? collectionOf(ui.player) : new Map();
+  const seen = new Set();
+  return `<div class="stack"><h3>What to expect</h3>${slots.filter(s => !seen.has(s.set) && seen.add(s.set)).map(sl => {
+    const o = ODDS.sets[sl.set]; if(!o) return "";
+    const set = SETS[sl.set]; const b = set.boosters[0].s;
+    const slotsTxt = Object.entries(b).filter(([k])=>!k.startsWith("foil")).map(([k,n])=>`${n} ${k}`).join(", ");
+    const rareTxt = Object.entries(o.raresPerPack).sort().map(([k,p])=>`${k}: ${Math.round(p*100)}%`).join(" · ");
+    const sumT = o.targets.reduce((a,t)=>a+t.p,0);
+    return `<details class="expect"><summary><b>${esc(set.name)}</b> <span class="muted small">${Math.round(o.pAnyTarget*100)}% of packs hold a target · ${fmt1(sumT*sl.packs)} expected in ${sl.packs} packs</span></summary>
+      <div class="small muted">Pack: ${esc(slotsTxt)}. Rares per pack: ${esc(rareTxt)}.</div>
+      <ul class="tlist">${[...o.targets].sort((a,b)=>b.p-a.p).map(t => { const has = own.get(NORM(t.name)); return `<li><button class="link" data-card="${esc(t.name)}" data-set="${esc(sl.set)}">${esc(t.name)}</button>${has ? ' <span class="badge cmd">Owned</span>' : ""}<span class="muted">${RAR_NAME[t.rarity]||""} · ${oneIn(t.p)}</span></li>`; }).join("")}</ul>
+    </details>`; }).join("")}
+    <p class="small muted">Odds come from ${ODDS.packsSimulated.toLocaleString()} simulated packs per set using the real print sheets. Targets are cards that see heavy Commander play today.</p></div>`;
 }
 async function doOpen(){
   const slots = planFor(); if(!slots.length || !ui.player || ui.busy) return;
@@ -227,7 +310,7 @@ async function doOpen(){
   ui.busy = true; renderOpen();
   const ok = await guarded(() => backend.createPull(id, pull), `Saved ${packs.length} packs to ${playerName(ui.player)}`);
   ui.busy = false;
-  if(ok) ui.lastOpen = {id, ...pull};
+  if(ok){ ui.lastOpen = {id, ...pull}; ui.revealIdx = 0; ui.revealDone = false; }
   renderOpen();
 }
 async function doPool(){
@@ -397,6 +480,47 @@ function renderDeck(){
     </div></div>`;
 }
 
+/* ---------- Stats ---------- */
+function roundSets(R){
+  const s = R.lines.map(([c])=>c);
+  if(R.branch) s.push(...R.branch.options.map(o=>o[0]));
+  if(R.split) s.push(R.split.a, R.split.b);
+  return [...new Set(s)];
+}
+function renderStats(){
+  const v = $("#view-stats");
+  if(ui.statsRound === null) ui.statsRound = unlocked();
+  const sel = ui.statsRound;
+  const rounds = visibleRounds();
+  const pulls = state.pulls.filter(p => !p.voided && p.kind !== "pool" && (sel === "all" || p.round === sel));
+  const rows = state.players.map(pl => {
+    const packs = pulls.filter(p => p.player === pl.id).flatMap(p => p.packs || []);
+    const st = packStats(packs); const exp = expectedFor(packs);
+    return {pl, st, exp, luck: exp.T > 0 ? st.targets.length / exp.T : null};
+  }).filter(r => r.st.packs > 0).sort((a,b) => b.st.targets.length - a.st.targets.length || b.st.R - a.st.R);
+  const allHits = rows.flatMap(r => r.st.targets.map(t => ({...t, who:r.pl.name}))).map(t => {
+    const o = ODDS.sets[t.s]; const tt = o && o.targets.find(x => x.name === t.nm); return {...t, p: tt ? tt.p : 0};
+  }).sort((a,b) => a.p - b.p);
+  const luckTxt = l => l === null ? "–" : `${l >= 1 ? "+" : ""}${Math.round((l-1)*100)}%`;
+  const roundChecklist = typeof sel === "number" ? (() => {
+    const R = ROUNDS[sel-1];
+    return `<div class="panel"><h2>Round ${R.n} targets</h2><p class="small muted">Every target in the sets this round can open, with real odds and who owns one.</p>
+      ${roundSets(R).map(code => { const o = ODDS.sets[code]; if(!o) return ""; return `<details class="expect"><summary><b>${esc(SETS[code].name)}</b> <span class="muted small">${o.targets.length} targets · ${Math.round(o.pAnyTarget*100)}% of packs hold one</span></summary>
+        <ul class="tlist">${[...o.targets].sort((a,b)=>b.p-a.p).map(t => { const owners = state.players.filter(pl => (collectionOf(pl.id).get(NORM(t.name))||{}).total).map(pl => pl.name); return `<li><button class="link" data-card="${esc(t.name)}" data-set="${esc(code)}">${esc(t.name)}</button>${owners.length ? ` <span class="badge cmd">${esc(owners.join(", "))}</span>` : ""}<span class="muted">${RAR_NAME[t.rarity]||""} · ${oneIn(t.p)}</span></li>`; }).join("")}</ul></details>`; }).join("")}
+    </div>`; })() : "";
+  v.innerHTML = `<div class="stack" style="gap:16px">
+    <div class="seg">${rounds.map(R => `<button data-statsround="${R.n}" aria-pressed="${sel===R.n}">Round ${R.n}</button>`).join("")}<button data-statsround="all" aria-pressed="${sel==="all"}">All rounds</button></div>
+    ${rows.length ? `<div class="tablewrap"><table><thead><tr><th>Player</th><th>Packs</th><th>Rares</th><th>Targets</th><th title="Targets hit compared with the real-odds expectation">Luck</th><th>Legends</th><th>Best pull</th></tr></thead><tbody>
+      ${rows.map(r => { const best = r.st.targets.map(t => { const o = ODDS.sets[t.s]; const tt = o && o.targets.find(x=>x.name===t.nm); return {...t, p: tt?tt.p:1}; }).sort((a,b)=>a.p-b.p)[0];
+        return `<tr><td><b>${esc(r.pl.name)}</b></td><td class="num">${r.st.packs}</td><td class="num">${r.st.R} <span class="muted">/ ${fmt1(r.exp.R)}</span></td><td class="num">${r.st.targets.length} <span class="muted">/ ${fmt1(r.exp.T)}</span></td><td class="num ${r.luck!==null && r.luck>=1 ? "ok" : "no"}">${luckTxt(r.luck)}</td><td class="num">${r.st.legends.length}</td><td>${best ? `<button class="link" data-card="${esc(best.nm)}" data-set="${esc(best.s)}">${esc(best.nm)}</button> <span class="muted small">${oneIn(best.p)}</span>` : '<span class="muted">none</span>'}</td></tr>`; }).join("")}
+      </tbody></table></div>
+      <p class="small muted">Rares and targets show actual / expected. Expected numbers come from each set's real print sheets for exactly the packs that player opened.</p>`
+      : `<div class="empty"><b>No openings ${sel==="all" ? "yet" : `in Round ${sel} yet`}.</b></div>`}
+    ${allHits.length ? `<div class="panel"><h2>Every target pulled</h2><ul class="tlist">${allHits.map(t => `<li><span><b>${esc(t.who)}</b> · <button class="link" data-card="${esc(t.nm)}" data-set="${esc(t.s)}">${esc(t.nm)}</button></span><span class="muted">${esc(SETS[t.s].name)} · ${oneIn(t.p)}</span></li>`).join("")}</ul></div>` : ""}
+    ${roundChecklist}
+  </div>`;
+}
+
 /* ---------- History ---------- */
 function renderHistory(){
   const v = $("#view-history");
@@ -471,7 +595,7 @@ function renderWho(){
 }
 function showGate(html){
   $("#view-gate").innerHTML = html; $("#view-gate").hidden = false; $("#tabs").hidden = true;
-  ["open","collection","deck","history","table"].forEach(k => $("#view-"+k).hidden = true);
+  ["open","collection","deck","stats","history","table"].forEach(k => $("#view-"+k).hidden = true);
 }
 function renderGate(){
   if(!backend.configured()){
@@ -497,11 +621,12 @@ function renderAll(){
   renderWho();
   if(renderGate()) return;
   ensureSelections();
-  ["open","collection","deck","history","table"].forEach(k => $("#view-"+k).hidden = k!==ui.tab);
+  ["open","collection","deck","stats","history","table"].forEach(k => $("#view-"+k).hidden = k!==ui.tab);
   document.querySelectorAll("#tabs button").forEach(b => b.setAttribute("aria-selected", String(b.dataset.tab===ui.tab)));
   if(ui.tab==="open") renderOpen();
   if(ui.tab==="collection") renderCollection();
   if(ui.tab==="deck") renderDeck();
+  if(ui.tab==="stats") renderStats();
   if(ui.tab==="history") renderHistory();
   if(ui.tab==="table") renderTable();
 }
@@ -521,6 +646,11 @@ document.addEventListener("click", async ev => {
   if(d.deckplayer){ ui.deckPlayer = d.deckplayer; ui.deckResult=null; ui.deckCmd=""; return renderDeck(); }
   if(d.round){ ui.round = /^\d+$/.test(d.round) ? +d.round : d.round; ui.roundChosen = true; return renderOpen(); }
   if(t.id==="openBtn") return doOpen();
+  if(d.reveal){ ui.revealMode = d.reveal; ui.revealDone = false; try { localStorage.setItem("ppo-reveal", d.reveal); } catch(e){} return renderOpen(); }
+  if(t.id==="revNext"){ ui.revealIdx++; return renderOpen(); }
+  if(t.id==="revPrev"){ ui.revealIdx = Math.max(0, ui.revealIdx-1); return renderOpen(); }
+  if(t.id==="revDone" || t.id==="revAll"){ ui.revealDone = true; return renderOpen(); }
+  if(d.statsround){ ui.statsRound = d.statsround === "all" ? "all" : +d.statsround; return renderStats(); }
   if(t.id==="poolSave") return doPool();
   if(d.color){ const s=ui.f.colors; s.has(d.color)?s.delete(d.color):s.add(d.color); return renderCollection(); }
   if(d.sort){ ui.sort = d.sort; return renderCollection(); }
@@ -576,12 +706,14 @@ document.addEventListener("keydown", ev => { if(ev.key==="Escape") $("#drawer").
 
 /* ---------- boot ---------- */
 async function boot(){
-  const res = await fetch("data/cards.json"); const DATA = await res.json();
+  const [DATA, odds] = await Promise.all([fetch("data/cards.json").then(r => r.json()), fetch("data/odds.json").then(r => r.json()).catch(() => null)]);
+  if(odds) ODDS = odds;
   CARDS = DATA.cards.map(c => ({name:c[0], mana:c[1], type:c[2], pt:c[3], text:c[4], ci:c[5]}));
   DATA.sets.forEach(s => SETS[s.code] = s); SET_ORDER = DATA.sets.map(s => s.code);
   CARDS.forEach((c,i) => BY_NAME.set(NORM(c.name), i));
+  for(const [code, o] of Object.entries(ODDS.sets)) TARGETS[code] = new Set(o.targets.map(t => BY_NAME.get(NORM(t.name))).filter(i => i !== undefined));
   const startTab = (location.hash||"").slice(1);
-  if(["open","collection","deck","history","table"].includes(startTab)) ui.tab = startTab;
+  if(["open","collection","deck","stats","history","table"].includes(startTab)) ui.tab = startTab;
   if(!backend.init()){ renderAll(); return; }
   let unsub = null;
   backend.onAuth(async user => {
