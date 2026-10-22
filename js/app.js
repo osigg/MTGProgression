@@ -1,5 +1,6 @@
 import * as backend from "./backend.js";
 import { ADMIN_EMAIL } from "./firebase-config.js";
+import * as IMG from "./images.js";
 
 /* ---------- card data ---------- */
 let CARDS = [], SETS = {}, SET_ORDER = [];
@@ -141,7 +142,9 @@ const ui = { tab:"open", player:null, round:1, branch:{}, split:4, throwback:"le
   lastOpen:null, colPlayer:null, f:{q:"", colors:new Set(), type:"", rarity:"", set:"", cmd:"", hideBasics:true}, sort:"name",
   deckPlayer:null, deckText:"", deckCmd:"", deckResult:null, histOpen:new Set(), voidConfirm:null, removeConfirm:null, banDraft:null,
   busy:false, checks:null, revealIdx:0, revealDone:false, statsRound:null,
-  revealMode: (() => { try { return localStorage.getItem("ppo-reveal") || "one"; } catch(e){ return "one"; } })() };
+  revealMode: (() => { try { return localStorage.getItem("ppo-reveal") || "one"; } catch(e){ return "one"; } })(),
+  images: (() => { try { return localStorage.getItem("ppo-images") !== "off"; } catch(e){ return true; } })(),
+  sb:{set:null, sort:"rarity", q:"", rarity:"", color:"", targets:false, own:"", hideBasics:true} };
 
 function ensureSelections(){
   const ids = state.players.map(p=>p.id); const mine = state.me && ids.includes(state.me.uid) ? state.me.uid : ids[0] || null;
@@ -267,11 +270,28 @@ function resultHTML(){
   return `${head}${statsHTML(st, exp)}${hits}${legends}
     <div class="packs">${L.packs.map((pk,i) => packHTML(pk,i)).join("")}</div>`;
 }
+/* ---------- card images ---------- */
+function numFor(nm, s){ const i = BY_NAME.get(NORM(nm)); return i!==undefined && SETS[s] ? (SETS[s].num[i] || "") : ""; }
+function cardImgHTML(nm, s, o = {}){
+  const i = BY_NAME.get(NORM(nm)); const c = i!==undefined ? CARDS[i] : null;
+  const r = c && SETS[s] ? rarityOf(s, i) : (o.rarity || "C");
+  const tgt = c && isTargetIdx(s, i);
+  const key = IMG.keyFor(nm, s, o.num || numFor(nm, s));
+  return `<button class="cimgbox ${r} ${tgt?"T":""} ${o.dim?"dim":""}" data-card="${esc(nm)}" data-set="${esc(s||"")}" title="${esc(nm)}">
+    <img class="cimg" data-ik="${esc(key)}" data-size="${o.big?"n":"s"}" alt="${esc(nm)}" width="244" height="340" decoding="async">
+    <span class="cimgname">${esc(nm)}</span>
+    ${o.qty ? `<span class="qty">×${o.qty}</span>` : ""}${tgt ? '<span class="target-tag">Target</span>' : ""}${o.note ? `<span class="cnote">${esc(o.note)}</span>` : ""}
+  </button>`;
+}
+function packCardsHTML(pk, big){
+  if(!ui.images) return `<ol>${pk.c.map(nm => cardRow(nm, pk.s)).join("")}</ol>`;
+  return `<div class="cgrid ${big?"big":""}">${pk.c.map((nm, j) => cardImgHTML(nm, pk.s, {big, num: pk.n && pk.n[j]})).join("")}</div>`;
+}
 function packHTML(pk, i, big){
   const set = SETS[pk.s];
   const st = set ? packStats([pk]) : null;
   const line = st ? [st.R ? `${st.R} rare${st.R>1?"s":""}` : "no rare", `${st.U} unc`, st.targets.length ? `<b class="tgt">${st.targets.length} target${st.targets.length>1?"s":""}</b>` : ""].filter(Boolean).join(" · ") : `${pk.c.length} card${pk.c.length>1?"s":""}`;
-  return `<article class="pack ${big?"big":""} ${st && st.targets.length ? "has-target" : ""}" style="animation-delay:${big?0:Math.min(i,20)*40}ms"><header><b>${esc(set ? set.name : pk.s ? pk.s.toUpperCase() : "Pool pick")}</b><span class="muted">${set ? `#${i+1} · ` : ""}${line}</span></header><ol>${pk.c.map(nm => cardRow(nm, pk.s)).join("")}</ol></article>`;
+  return `<article class="pack ${big?"big":""} ${st && st.targets.length ? "has-target" : ""}" style="animation-delay:${big?0:Math.min(i,20)*40}ms"><header><b>${esc(set ? set.name : pk.s ? pk.s.toUpperCase() : "Pool pick")}</b><span class="muted">${set ? `#${i+1} · ` : ""}${line}</span></header>${packCardsHTML(pk, big)}</article>`;
 }
 function cardRow(nm, s){
   const i = BY_NAME.get(NORM(nm)); const c = i!==undefined ? CARDS[i] : null; const r = c && s && SETS[s] ? rarityOf(s,i) : "C";
@@ -397,9 +417,10 @@ function renderCollection(){
         <div class="f"><label class="opt" style="font-weight:600"><input type="checkbox" id="fbasic" ${f.hideBasics?"checked":""}> Hide basic lands</label></div>
       </div>
       <p class="small muted">${rows.length} of ${all.length} unique cards shown${f.cmd ? `, all inside ${esc(f.cmd)}'s color identity` : ""}. Click a header to sort.</p>
+      ${ui.images ? `<div class="cgrid">${rows.map(r => { const s0 = Object.keys(r.sets)[0] || ""; return cardImgHTML(r.name, s0==="pool" ? "" : s0, {qty: r.total, num: r.nums[s0], note: r.banned ? "Banned" : ""}); }).join("") || '<p class="muted">No cards match these filters.</p>'}</div>` : `
       <div class="tablewrap" style="max-height:560px;overflow:auto"><table><thead><tr>
         <th data-sort="qty">Qty</th><th data-sort="name">Card</th><th data-sort="color">Cost</th><th data-sort="type">Type</th><th data-sort="rarity">Rarity</th><th>Printings</th></tr></thead>
-        <tbody>${rows.map(r => `<tr class="${r.banned?"banned":""}"><td class="num">${r.total}</td><td><button class="link" style="color:inherit;font-weight:${r.best==="R"?700:400}" data-card="${esc(r.name)}" data-set="${esc(Object.keys(r.sets)[0]||"")}">${esc(r.name)}</button> ${r.banned?'<span class="badge bad">Banned</span>':""}${r.c&&isLegend(r.c)?' <span class="badge cmd">Commander</span>':""}</td><td>${r.c?manaHTML(r.c.mana):""}</td><td>${r.c?esc(typeLine(r.c.type)):'<span class="muted">Pool pick</span>'}</td><td><span class="rar ${r.best}" style="display:inline-block"></span> ${r.best==="R"?"Rare":r.best==="U"?"Uncommon":r.best==="L"?"Basic":"Common"}</td><td class="small muted">${Object.entries(r.sets).map(([s,n])=>`${s==="pool"?"Pool":s.toUpperCase()}×${n}`).join(", ")}</td></tr>`).join("") || `<tr><td colspan="6" class="muted">No cards match these filters.</td></tr>`}</tbody></table></div>
+        <tbody>${rows.map(r => `<tr class="${r.banned?"banned":""}"><td class="num">${r.total}</td><td><button class="link" style="color:inherit;font-weight:${r.best==="R"?700:400}" data-card="${esc(r.name)}" data-set="${esc(Object.keys(r.sets)[0]||"")}">${esc(r.name)}</button> ${r.banned?'<span class="badge bad">Banned</span>':""}${r.c&&isLegend(r.c)?' <span class="badge cmd">Commander</span>':""}</td><td>${r.c?manaHTML(r.c.mana):""}</td><td>${r.c?esc(typeLine(r.c.type)):'<span class="muted">Pool pick</span>'}</td><td><span class="rar ${r.best}" style="display:inline-block"></span> ${r.best==="R"?"Rare":r.best==="U"?"Uncommon":r.best==="L"?"Basic":"Common"}</td><td class="small muted">${Object.entries(r.sets).map(([s,n])=>`${s==="pool"?"Pool":s.toUpperCase()}×${n}`).join(", ")}</td></tr>`).join("") || `<tr><td colspan="6" class="muted">No cards match these filters.</td></tr>`}</tbody></table></div>`}
     </div>
     <div class="panel">
       <h3>Export for Archidekt, Moxfield or Tabletop Simulator</h3>
@@ -478,6 +499,83 @@ function renderDeck(){
         ${R.unknown.length ? `<div class="note warn"><b>Names not recognized</b> (check spelling): <ul class="list-tight">${R.unknown.map(x=>`<li>${esc(x)}</li>`).join("")}</ul></div>` : ""}`
       : `<div class="empty"><b>Check a deck against what a player actually opened.</b><br>Counts copies, bans, singleton, the 100-card size and color identity. Basic lands are free.</div>`}
     </div></div>`;
+}
+
+/* ---------- Card lists (what's in each set's packs) ---------- */
+const PACK_ODDS = {};
+// Chance a given card shows up in one pack, from the set's booster layouts and sheet weights.
+// Targets use the simulated value from data/odds.json; everything else uses this close approximation.
+function perPackOdds(code){
+  if(PACK_ODDS[code]) return PACK_ODDS[code];
+  const s = SETS[code]; const Wv = s.boosters.reduce((a,b)=>a+b.w, 0); const out = new Map();
+  for(const b of s.boosters){
+    const notIn = new Map();
+    for(const [sh, k] of Object.entries(b.s)){
+      const list = s.sheets[sh]; const W = list.reduce((a,x)=>a+x[1], 0);
+      for(const [i, w] of list) notIn.set(i, (notIn.has(i) ? notIn.get(i) : 1) * Math.pow(1 - w/W, k));
+    }
+    for(const [i, q] of notIn) out.set(i, (out.get(i) || 0) + (b.w/Wv) * (1 - q));
+  }
+  const o = ODDS.sets[code];
+  if(o) for(const t of o.targets){ const i = BY_NAME.get(NORM(t.name)); if(i !== undefined && t.p > 0) out.set(i, t.p); }
+  PACK_ODDS[code] = out; return out;
+}
+function browsableSets(){
+  const groups = [];
+  for(const R of visibleRounds()) groups.push({label:`Round ${R.n}: ${R.title}`, sets: roundSets(R)});
+  return groups;
+}
+function renderSets(){
+  const v = $("#view-sets"); const groups = browsableSets(); const all = groups.flatMap(g => g.sets);
+  if(!all.length){ v.innerHTML = `<div class="empty"><b>No sets unlocked yet.</b></div>`; return; }
+  if(!all.includes(ui.sb.set)) ui.sb.set = all[0];
+  const code = ui.sb.set, set = SETS[code], sb = ui.sb, odds = perPackOdds(code);
+  const mine = state.me ? collectionOf(state.me.uid) : new Map();
+  const ciOrder = s => s==="" ? 9 : s.length>1 ? 8 : "WUBRG".indexOf(s);
+  let rows = Object.keys(set.rar).map(Number).map(i => ({i, c:CARDS[i], r:set.rar[i], p:odds.get(i) || 0, num:set.num[i] || "", own:(mine.get(NORM(CARDS[i].name))||{}).total || 0, tgt:isTargetIdx(code, i)}));
+  const total = rows.length, targets = rows.filter(x=>x.tgt).length;
+  rows = rows.filter(x => {
+    if(sb.hideBasics && isBasic(x.c)) return false;
+    if(sb.q && !NORM(x.c.name).includes(NORM(sb.q)) && !NORM(x.c.type).includes(NORM(sb.q)) && !NORM(x.c.text).includes(NORM(sb.q))) return false;
+    if(sb.rarity && x.r !== sb.rarity) return false;
+    if(sb.targets && !x.tgt) return false;
+    if(sb.own === "have" && !x.own) return false;
+    if(sb.own === "need" && x.own) return false;
+    if(sb.color){ const ci = x.c.ci; if(sb.color==="C" ? ci!=="" : sb.color==="M" ? ci.length<2 : !ci.includes(sb.color)) return false; }
+    return true;
+  });
+  const numKey = n => { const m = String(n).match(/^(\d+)(.*)$/); return m ? [+m[1], m[2]] : [1e9, n]; };
+  const sorters = {
+    rarity:(a,b)=>RANK[a.r]-RANK[b.r] || a.c.name.localeCompare(b.c.name),
+    odds:(a,b)=>a.p-b.p || a.c.name.localeCompare(b.c.name),
+    name:(a,b)=>a.c.name.localeCompare(b.c.name),
+    color:(a,b)=>ciOrder(a.c.ci)-ciOrder(b.c.ci) || a.c.name.localeCompare(b.c.name),
+    number:(a,b)=>{ const x=numKey(a.num), y=numKey(b.num); return x[0]-y[0] || String(x[1]).localeCompare(String(y[1])); },
+    type:(a,b)=>a.c.type.localeCompare(b.c.type) || a.c.name.localeCompare(b.c.name)
+  };
+  rows.sort(sorters[sb.sort] || sorters.rarity);
+  const layout = Object.entries(set.boosters[0].s).filter(([k])=>!k.startsWith("foil")).map(([k,n])=>`${n} ${k}`).join(", ");
+  const o = ODDS.sets[code];
+  v.innerHTML = `<div class="stack" style="gap:16px">
+    <div class="panel">
+      <div class="filters">
+        <div class="f"><label for="sbSet">Set</label><select id="sbSet">${groups.map(g => `<optgroup label="${esc(g.label)}">${g.sets.map(c => `<option value="${c}" ${c===code?"selected":""}>${esc(SETS[c].name)}</option>`).join("")}</optgroup>`).join("")}</select></div>
+        <div class="f"><label for="sbQ">Search name, type or text</label><input id="sbQ" type="text" value="${esc(sb.q)}" placeholder="Dragon, draw a card…"></div>
+        <div class="f"><label for="sbSort">Sort by</label><select id="sbSort">${[["rarity","Rarity"],["odds","Rarest first (odds)"],["name","Name"],["color","Color"],["type","Type"],["number","Collector number"]].map(([k,t])=>`<option value="${k}" ${sb.sort===k?"selected":""}>${t}</option>`).join("")}</select></div>
+        <div class="f"><label for="sbRar">Rarity</label><select id="sbRar"><option value="">Any</option>${[["R","Rare"],["U","Uncommon"],["C","Common"]].map(([k,t])=>`<option value="${k}" ${sb.rarity===k?"selected":""}>${t}</option>`).join("")}</select></div>
+        <div class="f"><label>Color</label><div class="row">${["W","U","B","R","G","M","C"].map(x=>`<button class="cchip ${x}" data-sbcolor="${x}" aria-pressed="${sb.color===x}" aria-label="${x==="M"?"Multicolor":x}">${x}</button>`).join("")}</div></div>
+        <div class="f"><label for="sbOwn">My collection</label><select id="sbOwn"><option value="">All cards</option><option value="have" ${sb.own==="have"?"selected":""}>Cards I own</option><option value="need" ${sb.own==="need"?"selected":""}>Cards I'm missing</option></select></div>
+        <div class="f"><label class="opt" style="font-weight:600"><input type="checkbox" id="sbTargets" ${sb.targets?"checked":""}> Targets only</label><label class="opt" style="font-weight:600"><input type="checkbox" id="sbBasics" ${sb.hideBasics?"checked":""}> Hide basic lands</label></div>
+      </div>
+      <p class="small muted"><b>${esc(set.name)}</b> (${set.year}) · ${set.size}-card packs: ${esc(layout)} · ${total} different cards · ${targets} targets${o ? ` · ${Math.round(o.pAnyTarget*100)}% of packs hold a target` : ""}. Showing ${rows.length}.</p>
+    </div>
+    ${ui.images
+      ? `<div class="cgrid">${rows.map(x => cardImgHTML(x.c.name, code, {num:x.num, qty:x.own, note:oneIn(x.p), dim: sb.own==="" && !x.own && !!state.me})).join("") || '<p class="muted">No cards match.</p>'}</div>`
+      : `<div class="tablewrap" style="max-height:640px;overflow:auto"><table><thead><tr><th>#</th><th>Card</th><th>Cost</th><th>Type</th><th>Rarity</th><th>Odds per pack</th><th>I own</th></tr></thead><tbody>
+        ${rows.map(x => `<tr><td class="num small muted">${esc(x.num)}</td><td><button class="link" style="color:inherit;font-weight:${x.r==="R"?700:400}" data-card="${esc(x.c.name)}" data-set="${code}">${esc(x.c.name)}</button>${x.tgt?'<span class="target-tag">Target</span>':""}</td><td>${manaHTML(x.c.mana)}</td><td>${esc(typeLine(x.c.type))}</td><td><span class="rar ${x.r}" style="display:inline-block"></span> ${RAR_NAME[x.r]||""}</td><td class="small">${oneIn(x.p)}</td><td class="num">${x.own||""}</td></tr>`).join("") || '<tr><td colspan="7" class="muted">No cards match.</td></tr>'}
+        </tbody></table></div>`}
+    <p class="small muted">Odds per pack come from each set's real print sheets. Dimmed cards are ones you don't own yet. Images from Scryfall.</p>
+  </div>`;
 }
 
 /* ---------- Stats ---------- */
@@ -580,7 +678,7 @@ function showCard(name, set){
   const i = BY_NAME.get(NORM(name)); const d = $("#drawer");
   if(i===undefined){ d.innerHTML = `<div class="ttl"><b>${esc(name)}</b><button class="btn" data-close="1">Close</button></div><p class="small muted">Not in this site's card data (likely a shared pool pick).</p><a href="${scryfallURL(name)}" target="_blank" rel="noopener">View on Scryfall</a>`; d.hidden=false; return; }
   const c = CARDS[i]; const r = set && SETS[set] ? rarityOf(set,i) : "";
-  d.innerHTML = `<div class="ttl"><div><b>${esc(c.name)}</b> ${manaHTML(c.mana)}</div><button class="btn" data-close="1">Close</button></div>
+  d.innerHTML = `${ui.images ? `<div class="cimgbox big drawerimg"><img class="cimg" data-ik="${esc(IMG.keyFor(c.name, set, numFor(c.name, set)))}" data-size="n" alt="${esc(c.name)}" width="244" height="340"></div>` : ""}<div class="ttl"><div><b>${esc(c.name)}</b> ${manaHTML(c.mana)}</div><button class="btn" data-close="1">Close</button></div>
     <div class="tl">${esc(typeLine(c.type))}${c.pt?` · ${esc(c.pt)}`:""}${set&&SETS[set]?` · ${esc(SETS[set].name)} ${r==="R"?"rare":r==="U"?"uncommon":r==="L"?"basic land":"common"}`:""}</div>
     <div class="ox">${esc(c.text) || '<span class="muted">No rules text.</span>'}</div>
     <div class="row small"><span class="muted">Color identity: ${c.ci ? c.ci.split("").join(" ") : "colorless"}</span><a href="${scryfallURL(c.name, set)}" target="_blank" rel="noopener">View on Scryfall</a></div>`;
@@ -591,11 +689,11 @@ function showCard(name, set){
 function renderWho(){
   const w = $("#who");
   if(!state.me){ w.innerHTML = ""; return; }
-  w.innerHTML = `${isAdmin() ? '<span class="admin-tag">Admin</span>' : ""}<span>${esc(myProfile() ? myProfile().name : state.me.email)}</span><button class="btn" id="signOut">Sign out</button>`;
+  w.innerHTML = `<button class="btn" id="imgToggle" aria-pressed="${ui.images}">Images: ${ui.images ? "on" : "off"}</button>${isAdmin() ? '<span class="admin-tag">Admin</span>' : ""}<span>${esc(myProfile() ? myProfile().name : state.me.email)}</span><button class="btn" id="signOut">Sign out</button>`;
 }
 function showGate(html){
   $("#view-gate").innerHTML = html; $("#view-gate").hidden = false; $("#tabs").hidden = true;
-  ["open","collection","deck","stats","history","table"].forEach(k => $("#view-"+k).hidden = true);
+  ["open","collection","sets","deck","stats","history","table"].forEach(k => $("#view-"+k).hidden = true);
 }
 function renderGate(){
   if(!backend.configured()){
@@ -621,11 +719,12 @@ function renderAll(){
   renderWho();
   if(renderGate()) return;
   ensureSelections();
-  ["open","collection","deck","stats","history","table"].forEach(k => $("#view-"+k).hidden = k!==ui.tab);
+  ["open","collection","sets","deck","stats","history","table"].forEach(k => $("#view-"+k).hidden = k!==ui.tab);
   document.querySelectorAll("#tabs button").forEach(b => b.setAttribute("aria-selected", String(b.dataset.tab===ui.tab)));
   if(ui.tab==="open") renderOpen();
   if(ui.tab==="collection") renderCollection();
   if(ui.tab==="deck") renderDeck();
+  if(ui.tab==="sets") renderSets();
   if(ui.tab==="stats") renderStats();
   if(ui.tab==="history") renderHistory();
   if(ui.tab==="table") renderTable();
@@ -646,6 +745,8 @@ document.addEventListener("click", async ev => {
   if(d.deckplayer){ ui.deckPlayer = d.deckplayer; ui.deckResult=null; ui.deckCmd=""; return renderDeck(); }
   if(d.round){ ui.round = /^\d+$/.test(d.round) ? +d.round : d.round; ui.roundChosen = true; return renderOpen(); }
   if(t.id==="openBtn") return doOpen();
+  if(t.id==="imgToggle"){ ui.images = !ui.images; try { localStorage.setItem("ppo-images", ui.images ? "on" : "off"); } catch(e){} if(!$("#drawer").hidden) $("#drawer").hidden = true; return renderAll(); }
+  if(d.sbcolor !== undefined){ ui.sb.color = ui.sb.color === d.sbcolor ? "" : d.sbcolor; return renderSets(); }
   if(d.reveal){ ui.revealMode = d.reveal; ui.revealDone = false; try { localStorage.setItem("ppo-reveal", d.reveal); } catch(e){} return renderOpen(); }
   if(t.id==="revNext"){ ui.revealIdx++; return renderOpen(); }
   if(t.id==="revPrev"){ ui.revealIdx = Math.max(0, ui.revealIdx-1); return renderOpen(); }
@@ -685,12 +786,19 @@ document.addEventListener("change", ev => {
   if(t.id==="fset"){ ui.f.set=t.value; return renderCollection(); }
   if(t.id==="fcmd"){ ui.f.cmd=t.value; return renderCollection(); }
   if(t.id==="fbasic"){ ui.f.hideBasics=t.checked; return renderCollection(); }
+  if(t.id==="sbSet"){ ui.sb.set=t.value; return renderSets(); }
+  if(t.id==="sbSort"){ ui.sb.sort=t.value; return renderSets(); }
+  if(t.id==="sbRar"){ ui.sb.rarity=t.value; return renderSets(); }
+  if(t.id==="sbOwn"){ ui.sb.own=t.value; return renderSets(); }
+  if(t.id==="sbTargets"){ ui.sb.targets=t.checked; return renderSets(); }
+  if(t.id==="sbBasics"){ ui.sb.hideBasics=t.checked; return renderSets(); }
   if(t.id==="deckCmd"){ ui.deckCmd=t.value; return; }
   if(t.dataset.rename){ const n=t.value.trim(); if(n) guarded(() => backend.savePlayer(t.dataset.rename, {name:n}), "Renamed"); return; }
 });
 document.addEventListener("input", ev => {
   const t = ev.target;
   if(t.id==="splitRange"){ ui.split = +t.value; return keepFocus(renderOpen); }
+  if(t.id==="sbQ"){ ui.sb.q = t.value; clearTimeout(ui._sq); ui._sq = setTimeout(()=>keepFocus(renderSets), 180); return; }
   if(t.id==="fq"){ ui.f.q = t.value; clearTimeout(ui._qt); ui._qt = setTimeout(()=>keepFocus(renderCollection), 180); return; }
   if(t.id==="poolText"){ ui.poolText = t.value; return; }
   if(t.id==="deckText"){ ui.deckText = t.value; return; }
@@ -704,6 +812,11 @@ document.addEventListener("submit", async ev => {
 });
 document.addEventListener("keydown", ev => { if(ev.key==="Escape") $("#drawer").hidden = true; });
 
+/* ---------- images: fill any new <img class="cimg"> after each render ---------- */
+let hydrateQueued = false;
+new MutationObserver(() => { if(hydrateQueued || !ui.images) return; hydrateQueued = true; requestAnimationFrame(() => { hydrateQueued = false; IMG.hydrate(); }); })
+  .observe(document.body, {childList:true, subtree:true});
+
 /* ---------- boot ---------- */
 async function boot(){
   const [DATA, odds] = await Promise.all([fetch("data/cards.json").then(r => r.json()), fetch("data/odds.json").then(r => r.json()).catch(() => null)]);
@@ -713,7 +826,7 @@ async function boot(){
   CARDS.forEach((c,i) => BY_NAME.set(NORM(c.name), i));
   for(const [code, o] of Object.entries(ODDS.sets)) TARGETS[code] = new Set(o.targets.map(t => BY_NAME.get(NORM(t.name))).filter(i => i !== undefined));
   const startTab = (location.hash||"").slice(1);
-  if(["open","collection","deck","stats","history","table"].includes(startTab)) ui.tab = startTab;
+  if(["open","collection","sets","deck","stats","history","table"].includes(startTab)) ui.tab = startTab;
   if(!backend.init()){ renderAll(); return; }
   let unsub = null;
   backend.onAuth(async user => {

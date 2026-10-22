@@ -55,6 +55,11 @@ Hosting is GitHub Pages (free). Data and sign-in are Firebase on the free Spark 
 - **Stats tab**: per round or across all rounds, each player's packs, rares and targets as *actual / expected*, a luck score (targets hit vs. expected), legendary creatures and best pull, plus a list of every target pulled and a round checklist showing who owns each target.
 - **Targets** are listed per set in `tools/targets.json`. Odds come from simulating 20,000 packs per set on the real print sheets. After editing the list, regenerate the odds with `node tools/odds.js` and push `data/odds.json`.
 
+## Card images and card lists
+- **Images** come from [Scryfall](https://scryfall.com) for the exact printing (set and collector number), in pack reveals, History, Collections, Card lists and the card detail panel. The **Images: on/off** button at the top switches between pictures and the compact text view; the choice is remembered per browser.
+- Lookups go 75 cards at a time to Scryfall's `/cards/collection` endpoint, no faster than one request every 150 ms, and the image links are cached in each browser so a printing is only looked up once. If Scryfall has no image for a printing, the card shows its name instead.
+- **Card lists** tab: every card that can come out of a set's packs, for the sets in unlocked rounds (admin sees all). Search by name, type or rules text; filter by rarity, color, targets, or cards you own / are missing; sort by rarity, rarest first, name, color, type or collector number. Each card shows its odds per pack and how many you own.
+
 ## Exporting to Archidekt and Tabletop Simulator
 **Collections > Copy list** gives lines like `1x Force of Will (all) 28`. Paste them into Archidekt's collection import or a new deck. Then export the finished deck from Archidekt or Moxfield and load it into Tabletop Simulator with a deck importer such as [tts-deckconverter](https://github.com/jeandeaual/tts-deckconverter).
 
@@ -72,6 +77,7 @@ Change the email in **both** `js/firebase-config.js` and `firestore.rules`, push
 | `index.html`, `css/style.css` | Page shell and styles |
 | `js/app.js` | The app: opening, collections, deck check, history, admin |
 | `js/backend.js` | Firebase sign-in and database calls |
+| `js/images.js` | Scryfall image lookups, batching and caching |
 | `js/firebase-config.js` | Your Firebase project config and the admin email |
 | `firestore.rules` | Database security rules (paste into the Firebase console) |
 | `data/cards.json` | Card text, booster sheets, rarities and collector numbers for all 20 sets |

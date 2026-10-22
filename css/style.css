@@ -170,3 +170,29 @@ details.expect summary{cursor:pointer}
 .tlist{list-style:none;margin:8px 0 0;padding:0;display:flex;flex-direction:column;gap:3px;font-size:.86rem}
 .tlist li{display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap}
 td.ok{color:var(--good)} td.no{color:var(--muted)}
+
+/* card images */
+.cgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(118px,1fr));gap:10px}
+.cgrid.big{grid-template-columns:repeat(auto-fill,minmax(150px,1fr))}
+.pack .cgrid{padding:10px;grid-template-columns:repeat(auto-fill,minmax(84px,1fr));gap:6px}
+.pack.big .cgrid{grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:10px}
+.pack.big{max-width:none}
+.cimgbox{position:relative;display:block;padding:0;border:0;background:var(--sunk);border-radius:4.75% / 3.4%;aspect-ratio:488/680;overflow:hidden;cursor:pointer;width:100%;max-width:100%;font:inherit;color:var(--fg)}
+.cimgbox img{width:100%;height:100%;object-fit:cover;display:block;position:relative;z-index:1}
+.cimgbox img:not([src]){visibility:hidden}
+.cimgname{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;text-align:center;padding:8px;font-size:.78rem;font-weight:600;color:var(--muted);z-index:0}
+.cimgbox.noimg .cimgname{color:var(--fg)}
+.cimgbox.R{box-shadow:0 0 0 2px color-mix(in srgb,var(--rare) 55%,transparent)}
+.cimgbox.T{box-shadow:0 0 0 3px var(--rare)}
+.cimgbox:focus-visible{outline:2px solid var(--accent);outline-offset:3px}
+.cimgbox:hover{transform:translateY(-2px);transition:transform .12s}
+.cimgbox.dim img{filter:grayscale(.85) brightness(.75)}
+.cimgbox .qty,.cimgbox .target-tag,.cimgbox .cnote{position:absolute;z-index:2;font-size:.68rem;font-weight:700;border-radius:4px;padding:1px 6px}
+.cimgbox .qty{top:6px;right:6px;background:var(--fg);color:var(--bg)}
+.cimgbox .target-tag{top:6px;left:6px;margin:0;background:var(--rare);color:#1b1408;border:0}
+.cimgbox .cnote{bottom:6px;left:6px;right:6px;text-align:center;background:color-mix(in srgb,var(--surface) 88%,transparent);color:var(--fg);font-weight:600}
+.drawerimg{max-width:260px;margin:0 auto 4px;cursor:default}
+.drawer{max-height:calc(100vh - 32px);overflow:auto}
+#imgToggle[aria-pressed="false"]{color:var(--muted)}
+@media (prefers-reduced-motion:reduce){.cimgbox:hover{transform:none}}
+@media (max-width:480px){.cgrid{grid-template-columns:repeat(auto-fill,minmax(96px,1fr));gap:8px}.cgrid.big,.pack.big .cgrid{grid-template-columns:repeat(auto-fill,minmax(120px,1fr))}}
