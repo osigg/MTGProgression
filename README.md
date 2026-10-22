@@ -44,9 +44,15 @@ Hosting is GitHub Pages (free). Data and sign-in are Firebase on the free Spark 
 3. Send the link to your friends. Each signs in with Google and picks a name.
 
 ## Running a round
+- **Opening a round**: tick which parts to open (each line set, the branch, the Stronghold/Exodus split, the throwback). You can open all 10 Unlimited now and Legends or your branch later, or tick everything at once. Each part can be added once; the branch choice locks when it's added.
+- **Add or reroll**: opened packs are not saved until you click **Add to collection**. **Reroll** replaces every waiting pack. History shows how many times an opening was rerolled.
+- **Practice packs**: open 1 to 20 packs of any unlocked set just to see what comes out. Nothing is saved.
+- **Add / remove cards**: players add cards (shared-pool picks, round prizes) or remove them (corrections) with a reason; every change is logged in History.
+
+### Round basics
 - Players see and open only rounds up to the unlocked one. When everyone's done, the admin clicks **Unlock Round N** in **Players & bans**.
 - If someone's opening goes wrong, the admin voids it in **History** and opens a replacement for them (admin can open for any player).
-- Shared-pool picks go in **Open packs > Shared pool**, one per line with an edition: `Sol Ring (2ed) 270`.
+- Shared-pool picks and prizes go in **Open packs > Add / remove cards**, one per line with a count and edition: `2 Sol Ring (2ed) 270`.
 - Bans go in **Players & bans > Ban list**. Collections and deck checks flag banned cards.
 
 ## Opening, stats and targets
@@ -67,6 +73,9 @@ Hosting is GitHub Pages (free). Data and sign-in are Firebase on the free Spark 
 1. Add the new sets to `data/cards.json` (same structure as the existing sets: booster slots, sheets with weights, rarity and collector number per card).
 2. Add a round entry to the `ROUNDS` list near the top of `js/app.js`.
 3. Push. GitHub Pages updates in about a minute. Collections live in Firebase, so updates never touch them.
+
+## Updating the database rules
+Whenever `firestore.rules` changes in this repo, paste the whole file into **Firestore > Rules** in the Firebase console and click **Publish**. The site checks the rules on every save, so new features that write new kinds of entries won't work until the new rules are published.
 
 ## Changing the admin
 Change the email in **both** `js/firebase-config.js` and `firestore.rules`, push, and re-publish the rules in the Firebase console.

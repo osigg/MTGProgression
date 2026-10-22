@@ -119,10 +119,18 @@ function playerName(id){ const p = state.players.find(x=>x.id===id); return p ? 
 function livePulls(pid){ return state.pulls.filter(p => p.player===pid && !p.voided); }
 function collectionOf(pid){
   const m = new Map();
-  for(const pull of livePulls(pid)){
+  const pulls = livePulls(pid).slice().sort((a,b) => (a.created||"").localeCompare(b.created||""));
+  for(const pull of pulls){
     for(const pk of pull.packs || []){
       pk.c.forEach((nm, j) => {
         const k = NORM(nm); let e = m.get(k);
+        if(pull.kind === "remove"){   // take one copy out, from the named printing if it has one
+          if(!e) return;
+          const code = pk.s && e.sets[pk.s] ? pk.s : Object.keys(e.sets).sort((a,b)=>e.sets[b]-e.sets[a])[0];
+          e.sets[code]--; if(!e.sets[code]) delete e.sets[code];
+          if(--e.total <= 0) m.delete(k);
+          return;
+        }
         if(!e){ e = {name:nm, idx: BY_NAME.has(k) ? BY_NAME.get(k) : -1, total:0, sets:{}, nums:{}, best:"C"}; m.set(k,e); }
         e.total++; const code = pk.s || "pool"; e.sets[code] = (e.sets[code]||0)+1;
         const num = (pk.n && pk.n[j]) || (e.idx>=0 && SETS[code] ? SETS[code].num[e.idx] : "");
@@ -135,7 +143,31 @@ function collectionOf(pid){
 }
 const banSet = () => new Set(bans().map(NORM));
 function roundPullId(uid, n){ return `${uid}_r${n}`; }
-function roundDone(uid, n){ return state.pulls.some(p => p.player===uid && p.kind==="packs" && p.round===n && !p.voided); }
+// A round is opened slot by slot (each line set, the branch, the split, the throwback).
+// Saved openings carry slot = that key; older whole-round openings have no slot and cover every slot.
+function slotPull(uid, n, key){ return state.pulls.find(p => p.player===uid && p.kind==="packs" && p.round===n && !p.voided && (!p.slot || p.slot===key)); }
+function roundSlots(R){
+  const out = R.lines.map(([s,n]) => ({key:`line-${s}`, kind:"Line", label:SETS[s].name, parts:[{set:s, packs:n}]}));
+  if(R.branch){
+    const done = ui.player && slotPull(ui.player, R.n, "branch");
+    const chosen = done && done.packs && done.packs[0] ? done.packs[0].s : (ui.branch[R.n] || R.branch.options[0][0]);
+    const o = R.branch.options.find(x=>x[0]===chosen) || R.branch.options[0];
+    out.push({key:"branch", kind:"Branch", label:SETS[o[0]].name, parts:[{set:o[0], packs:o[1]}]});
+  }
+  if(R.split){
+    const a = Math.max(0, Math.min(R.split.total, ui.split)); const parts = [];
+    if(a) parts.push({set:R.split.a, packs:a}); if(R.split.total-a) parts.push({set:R.split.b, packs:R.split.total-a});
+    out.push({key:"split", kind:"Mix and match", label:`${a} ${SETS[R.split.a].name} · ${R.split.total-a} ${SETS[R.split.b].name}`, parts});
+  }
+  if(R.throwback) out.push({key:"throwback", kind:"Throwback", label:SETS[ui.throwback].name, parts:[{set:ui.throwback, packs:throwbackPacks(ui.throwback)}]});
+  return out;
+}
+// Which slots are ticked for opening (defaults to every slot not opened yet).
+function selectedSlots(R){
+  const all = roundSlots(R).filter(sl => !(ui.player && slotPull(ui.player, R.n, sl.key)));
+  if(!ui.sel[R.n]) ui.sel[R.n] = new Set(all.map(sl => sl.key));
+  return all.filter(sl => ui.sel[R.n].has(sl.key));
+}
 
 /* ---------- UI state ---------- */
 const ui = { tab:"open", player:null, round:1, branch:{}, split:4, throwback:"leg", extraSet:"2ed", extraCount:1, poolText:"", poolRound:1,
@@ -144,6 +176,7 @@ const ui = { tab:"open", player:null, round:1, branch:{}, split:4, throwback:"le
   busy:false, checks:null, revealIdx:0, revealDone:false, statsRound:null,
   revealMode: (() => { try { return localStorage.getItem("ppo-reveal") || "one"; } catch(e){ return "one"; } })(),
   images: (() => { try { return localStorage.getItem("ppo-images") !== "off"; } catch(e){ return true; } })(),
+  pending:null, sel:{}, simSet:null, simCount:3, adjMode:"add", adjReason:"Shared pool pick",
   sb:{set:null, sort:"rarity", q:"", rarity:"", color:"", targets:false, own:"", hideBasics:true} };
 
 function ensureSelections(){
@@ -164,13 +197,11 @@ function visibleRounds(){ return ROUNDS.filter(R => isAdmin() || R.n <= unlocked
 function planFor(){
   const r = ui.round;
   if(typeof r === "number"){
-    const R = ROUNDS[r-1]; const slots = R.lines.map(([s,n]) => ({kind:"Line", set:s, packs:n}));
-    if(R.branch){ const ch = ui.branch[r] || R.branch.options[0][0]; const o = R.branch.options.find(x=>x[0]===ch); slots.push({kind:"Branch", set:o[0], packs:o[1]}); }
-    if(R.split){ const a = Math.max(0, Math.min(R.split.total, ui.split)); if(a) slots.push({kind:"Mix", set:R.split.a, packs:a}); if(R.split.total-a) slots.push({kind:"Mix", set:R.split.b, packs:R.split.total-a}); }
-    if(R.throwback) slots.push({kind:"Throwback", set:ui.throwback, packs:throwbackPacks(ui.throwback)});
-    return slots;
+    const R = ROUNDS[r-1];
+    return selectedSlots(R).flatMap(sl => sl.parts.map(pt => ({kind:sl.kind, slot:sl.key, set:pt.set, packs:pt.packs})));
   }
   if(r === "extra") return [{kind:"Extra", set:ui.extraSet, packs:Math.max(1, Math.min(60, ui.extraCount|0))}];
+  if(r === "sim"){ const sets = simSets(); if(!sets.includes(ui.simSet)) ui.simSet = sets[0]; return [{kind:"Practice", set:ui.simSet, packs:Math.max(1, Math.min(20, ui.simCount|0))}]; }
   return [];
 }
 function slotHTML(kind, s, n){ return `<div class="slot"><div><div class="k">${kind}</div><div class="n">${esc(SETS[s].name)}</div></div><div class="c">${n} × ${SETS[s].size} = ${n*SETS[s].size}</div></div>`; }
@@ -178,49 +209,71 @@ function renderOpen(){
   const v = $("#view-open");
   const rounds = visibleRounds().map(R => `<button data-round="${R.n}" aria-pressed="${ui.round===R.n}">Round ${R.n}${R.n>unlocked()?" 🔒":""}</button>`).join("") +
     (isAdmin() ? `<button data-round="extra" aria-pressed="${ui.round==="extra"}">Extra packs</button>` : "") +
-    `<button data-round="pool" aria-pressed="${ui.round==="pool"}">Shared pool</button>`;
+    `<button data-round="sim" aria-pressed="${ui.round==="sim"}">Practice packs</button>` +
+    `<button data-round="pool" aria-pressed="${ui.round==="pool"}">Add / remove cards</button>`;
   const who = ui.player ? playerName(ui.player) : "you";
   let planHTML = "";
   if(typeof ui.round === "number"){
     const R = ROUNDS[ui.round-1];
-    const lines = R.lines.map(([s,n]) => slotHTML("Line", s, n)).join("");
-    let extra = "";
-    if(R.branch){
-      const ch = ui.branch[R.n] || R.branch.options[0][0]; const o = R.branch.options.find(x=>x[0]===ch);
-      extra = `<div class="slot"><div><div class="k">${esc(R.branch.label)}</div><div class="n">${esc(SETS[o[0]].name)}</div></div><div class="c">${o[1]} × ${SETS[o[0]].size} = ${o[1]*SETS[o[0]].size}</div>
-        <div class="opts">${R.branch.options.map(([s,n,why]) => `<label class="opt"><input type="radio" name="branch" value="${s}" ${s===ch?"checked":""}> <span>${esc(SETS[s].name)} <span class="muted">(${n} packs)</span><br><span class="why">${esc(why)}</span></span></label>`).join("")}</div></div>`;
-    }
-    if(R.split){
-      const a = Math.max(0, Math.min(R.split.total, ui.split)), b = R.split.total - a;
-      extra = `<div class="slot"><div><div class="k">Mix and match: ${R.split.total} packs</div><div class="n">${a} Stronghold · ${b} Exodus</div></div><div class="c">${R.split.total} × 15 = ${R.split.total*15}</div>
-        <div class="opts"><label for="splitRange" class="small">Stronghold packs: <b>${a}</b></label><input id="splitRange" type="range" min="0" max="${R.split.total}" step="1" value="${a}"><span class="why">Stronghold: Slivers, Spikes, Sliver Queen. Exodus: Coat of Arms, Soul Warden, Mirri.</span></div></div>`;
-    }
-    if(R.throwback){
-      const tp = throwbackPacks(ui.throwback);
-      extra = `<div class="slot"><div><div class="k">Throwback: about 60 cards from one earlier set</div><div class="n">${esc(SETS[ui.throwback].name)}</div></div><div class="c">${tp} × ${SETS[ui.throwback].size} = ${tp*SETS[ui.throwback].size}</div>
-        <div class="opts"><select id="throwSel" aria-label="Throwback set">${R.throwback.sets.map(s => `<option value="${s}" ${s===ui.throwback?"selected":""}>${esc(SETS[s].name)} (${throwbackPacks(s)} packs)</option>`).join("")}</select></div></div>`;
-    }
-    const slots = planFor(); const total = slots.reduce((a,s)=>a+s.packs*SETS[s.set].size,0); const packs = slots.reduce((a,s)=>a+s.packs,0);
-    const done = ui.player && roundDone(ui.player, ui.round);
     const locked = ui.round > unlocked();
+    const sel = selectedSlots(R); const selKeys = new Set(sel.map(x=>x.key));
+    const rows = roundSlots(R).map(sl => {
+      const done = ui.player && slotPull(ui.player, R.n, sl.key);
+      const packs = sl.parts.reduce((a,p)=>a+p.packs,0), cards = sl.parts.reduce((a,p)=>a+p.packs*SETS[p.set].size,0);
+      let opts = "";
+      if(!done && sl.key==="branch"){
+        const ch = sl.parts[0].set;
+        opts = `<div class="opts">${R.branch.options.map(([s,n,why]) => `<label class="opt"><input type="radio" name="branch" value="${s}" ${s===ch?"checked":""} ${ui.pending?"disabled":""}> <span>${esc(SETS[s].name)} <span class="muted">(${n} packs)</span><br><span class="why">${esc(why)}</span></span></label>`).join("")}</div>`;
+      }
+      if(!done && sl.key==="split"){
+        const a = sl.parts.find(p=>p.set===R.split.a)?.packs || 0;
+        opts = `<div class="opts"><label for="splitRange" class="small">${esc(SETS[R.split.a].name)} packs: <b>${a}</b></label><input id="splitRange" type="range" min="0" max="${R.split.total}" step="1" value="${a}"><span class="why">Stronghold: Slivers, Spikes, Sliver Queen. Exodus: Coat of Arms, Soul Warden, Mirri.</span></div>`;
+      }
+      if(!done && sl.key==="throwback"){
+        opts = `<div class="opts"><select id="throwSel" aria-label="Throwback set">${R.throwback.sets.map(s => `<option value="${s}" ${s===ui.throwback?"selected":""}>${esc(SETS[s].name)} (${throwbackPacks(s)} packs)</option>`).join("")}</select></div>`;
+      }
+      const label = sl.key==="branch" && !done ? `${esc(R.branch.label)}` : esc(sl.kind);
+      return `<div class="slot ${done?"done":""}">
+        <label class="slotpick">${done ? `<span class="tick" aria-hidden="true">✓</span>` : `<input type="checkbox" data-slot="${sl.key}" ${selKeys.has(sl.key)?"checked":""} ${ui.pending?"disabled":""} aria-label="Open ${esc(sl.label)}">`}
+          <div><div class="k">${label}</div><div class="n">${esc(sl.label)}</div>${done ? `<div class="small muted">Opened ${esc(fmtDate(done.created))}</div>` : ""}</div></label>
+        <div class="c">${packs} pack${packs>1?"s":""} · ${cards}</div>${opts}</div>`;
+    }).join("");
+    const remaining = roundSlots(R).filter(sl => !(ui.player && slotPull(ui.player, R.n, sl.key)));
+    const packs = sel.reduce((a,sl)=>a+sl.parts.reduce((b,p)=>b+p.packs,0),0);
+    const total = sel.reduce((a,sl)=>a+sl.parts.reduce((b,p)=>b+p.packs*SETS[p.set].size,0),0);
     let action;
-    if(done && !isAdmin()) action = `<div class="note"><b>You've opened Round ${ui.round}.</b> Your cards are in Collections. If something went wrong, ask the admin to void it and re-open for you.</div>`;
-    else if(locked && !isAdmin()) action = `<div class="note"><b>Round ${ui.round} is locked.</b></div>`;
-    else action = `${done ? `<div class="note warn"><b>${esc(who)} already opened Round ${ui.round}.</b> Opening again adds a second set of packs. Void the old one in History first if this is a redo.</div>` : ""}
-      ${locked ? `<div class="note warn"><b>Round ${ui.round} is still locked for players.</b> As admin you can open it anyway.</div>` : ""}
-      <button class="btn primary" id="openBtn" ${!ui.player||ui.busy?"disabled":""}>Open ${packs} packs for ${esc(who)}</button>`;
-    planHTML = `<div class="plan">${lines}${extra}<div class="total"><span>${packs} packs</span><span>${total} cards</span></div></div>${action}`;
+    if(locked && !isAdmin()) action = `<div class="note"><b>Round ${ui.round} is locked.</b></div>`;
+    else if(!remaining.length) action = `<div class="note"><b>${ui.player===state.me?.uid ? "You've" : esc(who)+" has"} opened all of Round ${ui.round}.</b> ${isAdmin() ? "To redo part of it, void that entry in History." : "If something went wrong, ask the admin to void it."}</div>`;
+    else if(ui.pending) action = `<div class="note"><b>Packs waiting.</b> Add them to the collection or reroll on the right.</div>`;
+    else action = `${locked ? `<div class="note warn"><b>Round ${ui.round} is still locked for players.</b> As admin you can open it anyway.</div>` : ""}
+      <button class="btn primary" id="openBtn" ${!ui.player||ui.busy||!packs?"disabled":""}>${packs ? `Open ${packs} packs for ${esc(who)}` : "Tick at least one set to open"}</button>`;
+    const pickAll = remaining.length > 1 ? `<div class="row small"><button class="link" id="selAll">Select all</button><span class="muted">·</span><button class="link" id="selNone">Select none</button></div>` : "";
+    planHTML = `<div class="plan">${pickAll}${rows}<div class="total"><span>${packs} packs selected</span><span>${total} cards</span></div></div>${action}`;
   } else if(ui.round === "extra"){
     planHTML = `<p class="small muted">Admin only. For corrections, prizes, or anything outside the round plan. Saved and logged like any round.</p>
       <div class="row"><select id="extraSet" aria-label="Set">${SET_ORDER.map(s => `<option value="${s}" ${s===ui.extraSet?"selected":""}>${esc(SETS[s].name)} (${SETS[s].size}-card packs)</option>`).join("")}</select>
       <input id="extraCount" type="number" min="1" max="60" value="${ui.extraCount}" style="width:80px" aria-label="Packs"></div>
       <div class="total"><span>${ui.extraCount} packs</span><span>${ui.extraCount*SETS[ui.extraSet].size} cards</span></div>
-      <button class="btn primary" id="openBtn" ${!ui.player||ui.busy?"disabled":""}>Open ${ui.extraCount} packs for ${esc(who)}</button>`;
+      ${ui.pending ? `<div class="note"><b>Packs waiting.</b> Add them or reroll on the right.</div>` : `<button class="btn primary" id="openBtn" ${!ui.player||ui.busy?"disabled":""}>Open ${ui.extraCount} packs for ${esc(who)}</button>`}`;
+  } else if(ui.round === "sim"){
+    const sets = simSets(); if(!sets.includes(ui.simSet)) ui.simSet = sets[0];
+    planHTML = `<div class="note"><b>Practice only.</b> Packs opened here are not saved and don't touch anyone's collection.</div>
+      <div class="row"><select id="simSet" aria-label="Set">${sets.map(s => `<option value="${s}" ${s===ui.simSet?"selected":""}>${esc(SETS[s].name)} (${SETS[s].size}-card packs)</option>`).join("")}</select>
+      <label for="simCount" class="small">Packs</label><input id="simCount" type="number" min="1" max="20" value="${ui.simCount}" style="width:72px"></div>
+      <div class="total"><span>${ui.simCount} pack${ui.simCount>1?"s":""}</span><span>${ui.simCount*SETS[ui.simSet].size} cards</span></div>
+      <button class="btn primary" id="simBtn">Sim ${ui.simCount} pack${ui.simCount>1?"s":""}</button>`;
   } else {
-    planHTML = `<p class="small muted">Shared pool picks (2 per player per round, worst record first). One card per line with its edition, like <span style="font-family:var(--f-mono)">Sol Ring (2ed) 270</span>, so the export to Archidekt keeps the right printing. For sets on the round sheet the number is optional.</p>
-      <div class="row"><label for="poolRound">For round</label><select id="poolRound">${visibleRounds().map(R=>`<option value="${R.n}" ${R.n===ui.poolRound?"selected":""}>Round ${R.n}</option>`).join("")}</select></div>
-      <textarea id="poolText" placeholder="Sol Ring (2ed) 270&#10;Force of Will (all) 28" style="min-height:90px">${esc(ui.poolText)}</textarea>
-      <button class="btn primary" id="poolSave" ${!ui.player||ui.busy?"disabled":""}>Add to ${esc(who)}'s collection</button>`;
+    const add = ui.adjMode === "add";
+    const reasons = add ? ["Shared pool pick", "Round prize", "Other"] : ["Correction", "Round penalty", "Other"];
+    if(!reasons.includes(ui.adjReason)) ui.adjReason = reasons[0];
+    planHTML = `<div class="seg"><button data-adj="add" aria-pressed="${add}">Add cards</button><button data-adj="remove" aria-pressed="${!add}">Remove cards</button></div>
+      <div class="row"><label for="adjReason">Reason</label><select id="adjReason">${reasons.map(r => `<option ${r===ui.adjReason?"selected":""}>${r}</option>`).join("")}</select>
+        <label for="poolRound">Round</label><select id="poolRound">${visibleRounds().map(R=>`<option value="${R.n}" ${R.n===ui.poolRound?"selected":""}>Round ${R.n}</option>`).join("")}</select></div>
+      <p class="small muted">${add
+        ? `One line per card, with a count and edition so the Archidekt export keeps the right printing: <span style="font-family:var(--f-mono)">2 Sol Ring (2ed) 270</span>. For sets on the round sheet the number is optional.`
+        : `One line per card: <span style="font-family:var(--f-mono)">1 Sol Ring</span>, or <span style="font-family:var(--f-mono)">1 Sol Ring (2ed)</span> to remove a specific printing. You can only remove cards ${esc(who)} owns.`}</p>
+      <textarea id="poolText" placeholder="${add ? "1 Sol Ring (2ed) 270&#10;1 Force of Will (all) 28" : "1 Sol Ring&#10;2 Plains"}" style="min-height:90px">${esc(ui.poolText)}</textarea>
+      <button class="btn ${add?"primary":"danger"}" id="poolSave" ${!ui.player||ui.busy?"disabled":""}>${add ? `Add to ${esc(who)}'s collection` : `Remove from ${esc(who)}'s collection`}</button>`;
   }
   const R = typeof ui.round==="number" ? ROUNDS[ui.round-1] : null;
   v.innerHTML = `<div class="grid2">
@@ -230,9 +283,9 @@ function renderOpen(){
         ${R ? `<p class="small"><b>Round ${R.n}: ${esc(R.title)}</b> <span class="muted">(${R.years})</span></p>` : ""}
       </div>
       ${planHTML}
-      ${typeof ui.round==="number" || ui.round==="extra" ? `<div class="stack"><h3>Reveal</h3><div class="seg"><button data-reveal="one" aria-pressed="${ui.revealMode==="one"}">One pack at a time</button><button data-reveal="all" aria-pressed="${ui.revealMode==="all"}">All at once</button></div></div>` : ""}
-      ${typeof ui.round==="number" || ui.round==="extra" ? expectHTML(planFor()) : ""}
-      <p class="small muted">Opening saves every pack straight to the collection and the History tab, even when you reveal them one at a time. Each player gets one opening per round.</p>
+      ${typeof ui.round==="number" || ui.round==="extra" || ui.round==="sim" ? `<div class="stack"><h3>Reveal</h3><div class="seg"><button data-reveal="one" aria-pressed="${ui.revealMode==="one"}">One pack at a time</button><button data-reveal="all" aria-pressed="${ui.revealMode==="all"}">All at once</button></div></div>` : ""}
+      ${typeof ui.round==="number" || ui.round==="extra" || ui.round==="sim" ? expectHTML(planFor()) : ""}
+      ${ui.round==="sim" ? "" : ui.round==="pool" ? `<p class="small muted">Every add and remove is logged in History with its reason. The admin can void a mistake.</p>` : `<p class="small muted">Opening rolls the packs first. Look through them, then choose <b>Add to collection</b> or <b>Reroll</b>. Nothing is saved until you add, and each player adds one opening per round.</p>`}
     </div>
     <div class="stack">${resultHTML()}</div>
   </div>`;
@@ -249,7 +302,9 @@ function resultHTML(){
   const upto = oneByOne ? Math.min(ui.revealIdx, N-1) : N-1;
   const shown = L.packs.slice(0, upto+1);
   const st = packStats(shown); const exp = expectedFor(shown);
-  const head = `<div><h2>${esc(playerName(L.player))} · ${esc(L.label)}</h2><p class="small muted">${N} packs · saved ${esc(fmtDate(L.created))}${oneByOne ? ` · stats so far cover ${upto+1} of ${N}` : ""}</p></div>`;
+  const pendingBar = L.pending ? `<div class="pendingbar"><div><b>Not in your collection yet.</b> <span class="small muted">${ui.pending && ui.pending.rerolls ? `Rerolled ${ui.pending.rerolls} time${ui.pending.rerolls>1?"s":""}. ` : ""}Rerolling replaces all ${N} packs.</span></div>
+      <div class="row"><button class="btn" id="rerollOpen" ${ui.busy?"disabled":""}>Reroll</button><button class="btn primary" id="saveOpen" ${ui.busy?"disabled":""}>Add to collection</button></div></div>` : "";
+  const head = `${pendingBar}<div><h2>${L.practice ? esc(L.label) : `${esc(playerName(L.player))} · ${esc(L.label)}`}</h2><p class="small muted">${N} packs · ${L.practice ? "practice, not saved" : L.pending ? "not saved yet" : `saved ${esc(fmtDate(L.created))}`}${oneByOne ? ` · stats so far cover ${upto+1} of ${N}` : ""}</p></div>`;
   const hits = st.targets.length ? `<div class="note target-note"><b>Targets pulled:</b> ${st.targets.map(x => `<button class="link" data-card="${esc(x.nm)}" data-set="${esc(x.s)}">${esc(x.nm)}</button>`).join(", ")}</div>` : "";
   const legends = st.legends.length ? `<div class="note"><b>Commander options:</b> ${st.legends.map(x => `<button class="link" data-card="${esc(x.nm)}" data-set="${esc(x.s)}">${esc(x.nm)}</button>`).join(", ")}</div>` : "";
   if(oneByOne){
@@ -314,40 +369,112 @@ function expectHTML(slots){
     </details>`; }).join("")}
     <p class="small muted">Odds come from ${ODDS.packsSimulated.toLocaleString()} simulated packs per set using the real print sheets. Targets are cards that see heavy Commander play today.</p></div>`;
 }
-async function doOpen(){
+// Opening is two steps: roll the packs (not saved), then Add to collection or Reroll.
+function rollPacks(slots){
+  const packs = [];
+  for(const sl of slots) for(let k=0;k<sl.packs;k++) packs.push({s:sl.set, c:openBooster(sl.set).map(i => CARDS[i].name), _slot:sl.slot || ""});
+  return packs;
+}
+function doOpen(){
   const slots = planFor(); if(!slots.length || !ui.player || ui.busy) return;
   const R = typeof ui.round==="number" ? ROUNDS[ui.round-1] : null;
-  let id;
-  if(R){
-    id = roundPullId(ui.player, R.n);
-    if(isAdmin() && state.pulls.some(p => p.id === id)) id = `${id}_${rid()}`; // admin redo after a void
-  } else id = `${ui.player}_extra_${rid()}`;
-  const packs = [];
-  for(const sl of slots) for(let k=0;k<sl.packs;k++) packs.push({s:sl.set, c:openBooster(sl.set).map(i => CARDS[i].name)});
   const label = R ? `Round ${R.n}` : `Extra: ${ui.extraCount} ${SETS[ui.extraSet].name}`;
   const plan = slots.map(s => `${s.packs} ${SETS[s.set].name}`).join(", ");
-  const pull = {player:ui.player, round: R ? R.n : "extra", kind: R ? "packs" : "extra", label, plan, created:new Date().toISOString(), packs, voided:false};
-  ui.busy = true; renderOpen();
-  const ok = await guarded(() => backend.createPull(id, pull), `Saved ${packs.length} packs to ${playerName(ui.player)}`);
-  ui.busy = false;
-  if(ok){ ui.lastOpen = {id, ...pull}; ui.revealIdx = 0; ui.revealDone = false; }
+  ui.pending = {slots, player:ui.player, round: R ? R.n : "extra", kind: R ? "packs" : "extra", label, plan, rerolls:0, saved:new Set()};
+  ui.lastOpen = {id:null, pending:true, player:ui.player, label, plan, created:new Date().toISOString(), packs: rollPacks(slots)};
+  ui.revealIdx = 0; ui.revealDone = false;
   renderOpen();
 }
-async function doPool(){
-  const lines = ui.poolText.split("\n").map(s=>s.trim()).filter(Boolean); if(!lines.length || !ui.player || ui.busy) return;
-  const packs = []; const names = [];
-  for(const raw of lines){
-    let l = raw.replace(/^\d+\s*x?\s+/i,""); let s = "", n = "";
-    const m = l.match(/^(.*?)\s*\(([A-Za-z0-9]{2,6})\)\s*([\w-]+)?\s*$/);
-    if(m){ l = m[1]; s = m[2].toLowerCase(); n = m[3] || ""; }
-    const i = BY_NAME.get(NORM(l)); const name = i!==undefined ? CARDS[i].name : l.trim();
-    if(s && !n && i!==undefined && SETS[s]) n = SETS[s].num[i] || "";
-    names.push(name); packs.push({s, c:[name], n:[n]});
+function doReroll(){
+  const P = ui.pending; if(!P || ui.busy) return;
+  P.rerolls++;
+  if(P.saved.size){ toast("Part of this opening is already saved. Click Add to collection to finish saving it."); return; }
+  ui.lastOpen = {...ui.lastOpen, created:new Date().toISOString(), packs: rollPacks(P.slots)};
+  ui.revealIdx = 0; ui.revealDone = false;
+  toast(`Rerolled (${P.rerolls})`);
+  renderOpen();
+}
+async function doSaveOpen(){
+  const P = ui.pending; if(!P || ui.busy) return;
+  const strip = pk => ({s:pk.s, c:pk.c});
+  // Rounds save one entry per slot (each line set, branch, split, throwback); extra packs save one entry.
+  const groups = P.kind === "packs"
+    ? [...new Set(ui.lastOpen.packs.map(pk => pk._slot))].map(key => ({key, packs: ui.lastOpen.packs.filter(pk => pk._slot === key)}))
+    : [{key:"", packs: ui.lastOpen.packs}];
+  ui.busy = true; renderOpen();
+  let added = 0, failed = false;
+  for(const g of groups){
+    if(P.saved.has(g.key)) continue;
+    let id, label = P.label;
+    if(P.kind === "packs"){
+      id = `${roundPullId(P.player, P.round)}_${g.key}`;
+      if(isAdmin() && state.pulls.some(p => p.id === id)) id = `${id}_${rid()}`; // admin redo after a void
+      const sl = P.slots.find(x => x.slot === g.key);
+      label = `Round ${P.round} · ${sl.kind === "Line" ? SETS[sl.set].name : sl.kind === "Branch" ? `Branch: ${SETS[sl.set].name}` : sl.kind}`;
+    } else id = `${P.player}_extra_${rid()}`;
+    const plan = Object.entries(g.packs.reduce((a,pk)=>(a[pk.s]=(a[pk.s]||0)+1,a),{})).map(([s,n]) => `${n} ${SETS[s].name}`).join(", ");
+    const pull = {player:P.player, round:P.round, kind:P.kind, label, plan, rerolls:P.rerolls, created:new Date().toISOString(), packs:g.packs.map(strip), voided:false};
+    if(P.kind === "packs") pull.slot = g.key;
+    const ok = await guarded(() => backend.createPull(id, pull));
+    if(!ok){ failed = true; break; }
+    P.saved.add(g.key); added += g.packs.length;
   }
-  const id = `${ui.player}_pool_${rid()}`;
-  const pull = {player:ui.player, round:ui.poolRound, kind:"pool", label:`Shared pool, Round ${ui.poolRound}`, plan:`${names.length} picked card${names.length>1?"s":""}`, created:new Date().toISOString(), packs, voided:false};
+  ui.busy = false;
+  if(!failed){
+    toast(`Added ${added} packs to ${playerName(P.player)}'s collection`);
+    ui.pending = null; ui.lastOpen = {...ui.lastOpen, pending:false, created:new Date().toISOString()};
+    if(typeof P.round === "number") delete ui.sel[P.round];
+  }
+  renderOpen();
+}
+// Sets you can practice with: anything in an unlocked round (admin: every set).
+function simSets(){ return isAdmin() ? SET_ORDER.filter(c => c !== "3ed") : [...new Set(visibleRounds().filter(R => R.n <= unlocked()).flatMap(R => roundSets(R)))]; }
+function doSim(){
+  if(ui.pending){ toast("Add or reroll your waiting packs first"); return; }
+  const slots = planFor(); if(!slots.length) return;
+  const packs = [];
+  for(const sl of slots) for(let k=0;k<sl.packs;k++) packs.push({s:sl.set, c:openBooster(sl.set).map(i => CARDS[i].name)});
+  ui.lastOpen = {id:null, practice:true, player: state.me ? state.me.uid : null, label:`Practice: ${packs.length} ${SETS[slots[0].set].name}`, created:new Date().toISOString(), packs};
+  ui.revealIdx = 0; ui.revealDone = false;
+  renderOpen();
+}
+// Parse "2 Sol Ring (2ed) 270" style lines into {qty, name, set, num}.
+function parseCardLines(text){
+  const out = [];
+  for(const raw of text.split("\n").map(x=>x.trim()).filter(Boolean)){
+    let l = raw, qty = 1;
+    const q = l.match(/^(\d+)\s*x?\s+(.*)$/i); if(q){ qty = Math.max(1, Math.min(99, +q[1])); l = q[2]; }
+    let set = "", num = "";
+    const m = l.match(/^(.*?)\s*\(([A-Za-z0-9]{2,6})\)\s*([\w-]+)?\s*$/);
+    if(m){ l = m[1]; set = m[2].toLowerCase(); num = m[3] || ""; }
+    const i = BY_NAME.get(NORM(l)); const name = i!==undefined ? CARDS[i].name : l.trim();
+    if(set && !num && i!==undefined && SETS[set]) num = SETS[set].num[i] || "";
+    if(name) out.push({qty, name, set, num});
+  }
+  return out;
+}
+async function doAdjust(){
+  if(!ui.player || ui.busy) return;
+  const lines = parseCardLines(ui.poolText); if(!lines.length){ toast("Add at least one card, one per line."); return; }
+  const add = ui.adjMode === "add";
+  if(!add){
+    const own = collectionOf(ui.player); const problems = [];
+    for(const l of lines){
+      const e = own.get(NORM(l.name));
+      const have = !e ? 0 : l.set ? (e.sets[l.set] || 0) : e.total;
+      if(have < l.qty) problems.push(`${l.name}${l.set?` (${l.set})`:""}: owns ${have}`);
+    }
+    if(problems.length){ toast(`Can't remove more than owned. ${problems.join("; ")}`); return; }
+  }
+  const packs = lines.map(l => ({s:l.set, c:Array(l.qty).fill(l.name), n:Array(l.qty).fill(l.num)}));
+  const count = lines.reduce((a,l)=>a+l.qty, 0);
+  const kind = add ? (ui.adjReason === "Shared pool pick" ? "pool" : "add") : "remove";
+  const id = `${ui.player}_adj_${rid()}`;
+  const label = add ? `${ui.adjReason}, Round ${ui.poolRound}` : `Removed: ${ui.adjReason}, Round ${ui.poolRound}`;
+  const plan = `${add ? "Added" : "Removed"} ${count} card${count>1?"s":""}: ${lines.map(l => `${l.qty>1?l.qty+" ":""}${l.name}`).join(", ")}`;
+  const pull = {player:ui.player, round:ui.poolRound, kind, label, plan, created:new Date().toISOString(), packs, voided:false};
   ui.busy = true;
-  const ok = await guarded(() => backend.createPull(id, pull), `Added ${names.length} card${names.length>1?"s":""} to ${playerName(ui.player)}`);
+  const ok = await guarded(() => backend.createPull(id, pull), `${add ? "Added" : "Removed"} ${count} card${count>1?"s":""} ${add ? "to" : "from"} ${playerName(ui.player)}`);
   ui.busy = false;
   if(ok) ui.poolText = "";
   renderOpen();
@@ -590,7 +717,7 @@ function renderStats(){
   if(ui.statsRound === null) ui.statsRound = unlocked();
   const sel = ui.statsRound;
   const rounds = visibleRounds();
-  const pulls = state.pulls.filter(p => !p.voided && p.kind !== "pool" && (sel === "all" || p.round === sel));
+  const pulls = state.pulls.filter(p => !p.voided && (p.kind === "packs" || p.kind === "extra") && (sel === "all" || p.round === sel));
   const rows = state.players.map(pl => {
     const packs = pulls.filter(p => p.player === pl.id).flatMap(p => p.packs || []);
     const st = packStats(packs); const exp = expectedFor(packs);
@@ -626,7 +753,7 @@ function renderHistory(){
   if(!items.length){ v.innerHTML = `<div class="empty"><b>Nothing opened yet.</b><br>Every opening and pool pick lands here with a timestamp. Mistakes can be voided by the admin, never silently deleted.</div>`; return; }
   v.innerHTML = `<div class="stack"><p class="small muted">${items.length} entries. Voided entries stay listed but no longer count toward a collection.</p><div class="hist">${items.map(p => {
     const n = (p.packs||[]).reduce((a,k)=>a+k.c.length,0); const open = ui.histOpen.has(p.id);
-    return `<div class="hitem ${p.voided?"void":""}"><div class="hhead"><div><b>${esc(playerName(p.player))}</b> · ${esc(p.label)} ${p.voided?'<span class="badge void">Voided</span>':""}<div class="small muted">${esc(p.plan||"")} · ${n} cards</div></div><span class="when">${esc(fmtDate(p.created))}</span></div>
+    return `<div class="hitem ${p.voided?"void":""} ${p.kind==="remove"?"removal":""}"><div class="hhead"><div><b>${esc(playerName(p.player))}</b> · ${esc(p.label)} ${p.voided?'<span class="badge void">Voided</span>':""}<div class="small muted">${esc(p.plan||"")} · ${n} cards${p.rerolls ? ` · rerolled ${p.rerolls}×` : ""}</div></div><span class="when">${esc(fmtDate(p.created))}</span></div>
       <div class="row"><button class="btn" data-hist="${esc(p.id)}">${open?"Hide cards":"Show cards"}</button>
       ${!isAdmin() ? "" : ui.voidConfirm===p.id ? `<span class="confirm">${p.voided?"Count this entry again?":"Void this entry? Its cards leave the collection."} <button class="btn danger" data-voidyes="${esc(p.id)}">${p.voided?"Restore":"Void"}</button><button class="btn" data-voidno="1">Cancel</button></span>` : `<button class="btn ${p.voided?"":"danger"}" data-void="${esc(p.id)}">${p.voided?"Restore":"Void"}</button>`}</div>
       ${open ? `<div class="packs">${(p.packs||[]).map((pk,i)=>packHTML(pk,i)).join("")}</div>` : ""}</div>`; }).join("")}</div></div>`;
@@ -740,10 +867,12 @@ document.addEventListener("click", async ev => {
   if(d.tab) return setTab(d.tab);
   if(d.card) return showCard(d.card, d.set);
   if(d.close){ $("#drawer").hidden = true; return; }
-  if(d.player){ ui.player = d.player; ui.lastOpen = null; return renderOpen(); }
+  if(d.player){ if(ui.pending){ toast("Add or reroll the waiting packs first"); return; } ui.player = d.player; ui.lastOpen = null; ui.sel = {}; return renderOpen(); }
   if(d.colplayer){ ui.colPlayer = d.colplayer; ui.f.cmd=""; return renderCollection(); }
   if(d.deckplayer){ ui.deckPlayer = d.deckplayer; ui.deckResult=null; ui.deckCmd=""; return renderDeck(); }
-  if(d.round){ ui.round = /^\d+$/.test(d.round) ? +d.round : d.round; ui.roundChosen = true; return renderOpen(); }
+  if(d.round){ ui.round = /^\d+$/.test(d.round) ? +d.round : d.round; ui.roundChosen = true; if(ui.lastOpen && ui.lastOpen.practice && ui.round !== "sim") ui.lastOpen = null;
+    if(ui.round === "sim" && ui.lastOpen && !ui.lastOpen.practice && !ui.lastOpen.pending) ui.lastOpen = null;
+    return renderOpen(); }
   if(t.id==="openBtn") return doOpen();
   if(t.id==="imgToggle"){ ui.images = !ui.images; try { localStorage.setItem("ppo-images", ui.images ? "on" : "off"); } catch(e){} if(!$("#drawer").hidden) $("#drawer").hidden = true; return renderAll(); }
   if(d.sbcolor !== undefined){ ui.sb.color = ui.sb.color === d.sbcolor ? "" : d.sbcolor; return renderSets(); }
@@ -752,7 +881,12 @@ document.addEventListener("click", async ev => {
   if(t.id==="revPrev"){ ui.revealIdx = Math.max(0, ui.revealIdx-1); return renderOpen(); }
   if(t.id==="revDone" || t.id==="revAll"){ ui.revealDone = true; return renderOpen(); }
   if(d.statsround){ ui.statsRound = d.statsround === "all" ? "all" : +d.statsround; return renderStats(); }
-  if(t.id==="poolSave") return doPool();
+  if(t.id==="poolSave") return doAdjust();
+  if(t.id==="simBtn") return doSim();
+  if(t.id==="selAll" || t.id==="selNone"){ const R = ROUNDS[ui.round-1]; ui.sel[R.n] = new Set(t.id==="selAll" ? roundSlots(R).filter(sl => !slotPull(ui.player, R.n, sl.key)).map(sl=>sl.key) : []); return renderOpen(); }
+  if(t.id==="saveOpen") return doSaveOpen();
+  if(t.id==="rerollOpen") return doReroll();
+  if(d.adj){ ui.adjMode = d.adj; return renderOpen(); }
   if(d.color){ const s=ui.f.colors; s.has(d.color)?s.delete(d.color):s.add(d.color); return renderCollection(); }
   if(d.sort){ ui.sort = d.sort; return renderCollection(); }
   if(t.id==="copyExp"){ const txt=$("#expText"); try { await navigator.clipboard.writeText(txt.value); toast("Copied"); } catch(e){ txt.focus(); txt.select(); toast("Selected. Press Ctrl+C or Cmd+C to copy"); } return; }
@@ -776,11 +910,15 @@ document.addEventListener("click", async ev => {
 });
 document.addEventListener("change", ev => {
   const t = ev.target;
+  if(t.dataset.slot){ const set = ui.sel[ui.round] || new Set(); t.checked ? set.add(t.dataset.slot) : set.delete(t.dataset.slot); ui.sel[ui.round] = set; return renderOpen(); }
   if(t.name==="branch"){ ui.branch[ui.round] = t.value; return renderOpen(); }
   if(t.id==="throwSel"){ ui.throwback = t.value; return renderOpen(); }
   if(t.id==="extraSet"){ ui.extraSet = t.value; return renderOpen(); }
   if(t.id==="extraCount"){ ui.extraCount = Math.max(1, Math.min(60, +t.value||1)); return renderOpen(); }
   if(t.id==="poolRound"){ ui.poolRound = +t.value; return; }
+  if(t.id==="adjReason"){ ui.adjReason = t.value; return; }
+  if(t.id==="simSet"){ ui.simSet = t.value; return renderOpen(); }
+  if(t.id==="simCount"){ ui.simCount = Math.max(1, Math.min(20, +t.value||1)); return renderOpen(); }
   if(t.id==="ftype"){ ui.f.type=t.value; return renderCollection(); }
   if(t.id==="frar"){ ui.f.rarity=t.value; return renderCollection(); }
   if(t.id==="fset"){ ui.f.set=t.value; return renderCollection(); }
@@ -811,6 +949,8 @@ document.addEventListener("submit", async ev => {
   }
 });
 document.addEventListener("keydown", ev => { if(ev.key==="Escape") $("#drawer").hidden = true; });
+
+window.addEventListener("beforeunload", e => { if(ui.pending){ e.preventDefault(); e.returnValue = ""; } });
 
 /* ---------- images: fill any new <img class="cimg"> after each render ---------- */
 let hydrateQueued = false;

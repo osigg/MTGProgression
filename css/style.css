@@ -196,3 +196,9 @@ td.ok{color:var(--good)} td.no{color:var(--muted)}
 #imgToggle[aria-pressed="false"]{color:var(--muted)}
 @media (prefers-reduced-motion:reduce){.cimgbox:hover{transform:none}}
 @media (max-width:480px){.cgrid{grid-template-columns:repeat(auto-fill,minmax(96px,1fr));gap:8px}.cgrid.big,.pack.big .cgrid{grid-template-columns:repeat(auto-fill,minmax(120px,1fr))}}
+.hitem.removal{border-left:3px solid var(--bad)}
+.pendingbar{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;padding:12px 14px;border:1px solid var(--accent);background:var(--accent-soft);border-radius:var(--r);position:sticky;top:calc(env(safe-area-inset-top,0px) + 96px);z-index:4}
+.slot .slotpick{display:flex;gap:10px;align-items:flex-start;cursor:pointer;min-width:0}
+.slot .slotpick input{margin-top:3px;width:18px;height:18px;accent-color:var(--accent)}
+.slot.done{opacity:.75}
+.slot .tick{color:var(--good);font-weight:700;width:18px;text-align:center}

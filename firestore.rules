@@ -41,16 +41,19 @@ service cloud.firestore {
         && request.resource.data.player == request.auth.uid
         && request.resource.data.voided == false
         && (
-          // A round's packs: only unlocked rounds, and the fixed id means once per round.
+          // A round's packs, one entry per slot (line set, branch, split, throwback):
+          // only unlocked rounds, and the fixed id means each slot can be added once.
           (request.resource.data.kind == 'packs'
             && request.resource.data.round is int
             && request.resource.data.round >= 1
             && request.resource.data.round <= unlockedRound()
-            && pullId == request.auth.uid + '_r' + string(request.resource.data.round))
+            && request.resource.data.slot is string
+            && pullId == request.auth.uid + '_r' + string(request.resource.data.round) + '_' + request.resource.data.slot
+            && request.resource.data.slot.matches('line-[a-z0-9]+|branch|split|throwback'))
           ||
-          // Shared-pool picks the player enters themselves.
-          (request.resource.data.kind == 'pool'
-            && pullId.matches(request.auth.uid + '_pool_.*'))
+          // Cards the player adds (shared-pool picks, round prizes) or removes themselves.
+          (request.resource.data.kind in ['pool', 'add', 'remove']
+            && pullId.matches(request.auth.uid + '_(pool|adj)_.*'))
         )
       );
       // Voiding, restoring and corrections are admin only.
