@@ -59,20 +59,39 @@ function statsHTML(st, exp){
     </div>${colorBar(st.colors)}`;
 }
 
-// Round plan. To add a round: add its sets to data/cards.json and an entry here.
-const ROUNDS = [
-  {n:1, title:"The Beginning", years:"1993 to 1994", lines:[["2ed",10],["leg",10]],
-   branch:{label:"Branch: pick one", options:[["arn",5,"Swingy rares: Library of Alexandria, Bazaar of Baghdad"],["atq",5,"Artifacts fit any commander"],["drk",5,"Black and tribal"]]}},
-  {n:2, title:"Ice Age", years:"1994 to 1996", lines:[["ice",15]],
-   branch:{label:"Branch: pick one (72 cards each)", options:[["all",6,"Pitch spells, best fit with Ice Age"],["hml",9,"Commander branch: Baron Sengir, Autumn Willow"],["fem",9,"Tokens and tribes"],["chr",6,"Catch-up reprints of round 1 sets"]]}},
-  {n:3, title:"Mirage", years:"1996 to 1997", lines:[["mir",15]],
-   branch:{label:"Branch: pick one", options:[["vis",6,"Creature value, enters-the-battlefield"],["wth",6,"Graveyard"]]}},
-  {n:4, title:"Rath Cycle", years:"1997 to 1998", lines:[["tmp",12]],
-   split:{a:"sth", b:"exo", total:8}},
-  {n:5, title:"Urza's Block", years:"1998 to 1999", lines:[["usg",10],["ulg",5],["uds",5]],
-   throwback:{sets:["2ed","leg","arn","atq","drk","ice","all","hml","fem","chr","mir","vis","wth","tmp","sth","exo"], cards:60}}
-];
-const throwbackPacks = code => Math.round(60 / SETS[code].size);
+// Round plan. The admin edits rounds in the Rounds tab (saved to config/rounds in Firestore).
+// Each round is a list of slots, and each slot is opened and saved on its own:
+//   {type:"fixed",  key, set, packs}                          every player opens these packs
+//   {type:"choice", key, label, options:[{set, packs, note}]} player picks one option (a branch)
+//   {type:"mix",    key, label, sets:[a, b], total}           player splits `total` packs between two sets
+// Slot keys never change once a slot has been opened, because saved openings point at them.
+let ROUNDS = [];
+function defaultRounds(){
+  const tb = code => Math.round(60 / SETS[code].size);
+  const fixed = (set, packs) => ({type:"fixed", key:`line-${set}`, set, packs});
+  const opt = (set, packs, note="") => ({set, packs, note});
+  return [
+    {n:1, title:"The Beginning", years:"1993 to 1994", slots:[fixed("2ed",10), fixed("leg",10),
+      {type:"choice", key:"branch", label:"Branch", options:[opt("arn",5,"Swingy rares: Library of Alexandria, Bazaar of Baghdad"), opt("atq",5,"Artifacts fit any commander"), opt("drk",5,"Black and tribal")]}]},
+    {n:2, title:"Ice Age", years:"1994 to 1996", slots:[fixed("ice",15),
+      {type:"choice", key:"branch", label:"Branch (72 cards each)", options:[opt("all",6,"Pitch spells, best fit with Ice Age"), opt("hml",9,"Commander branch: Baron Sengir, Autumn Willow"), opt("fem",9,"Tokens and tribes"), opt("chr",6,"Catch-up reprints of round 1 sets")]}]},
+    {n:3, title:"Mirage", years:"1996 to 1997", slots:[fixed("mir",15),
+      {type:"choice", key:"branch", label:"Branch", options:[opt("vis",6,"Creature value, enters-the-battlefield"), opt("wth",6,"Graveyard")]}]},
+    {n:4, title:"Rath Cycle", years:"1997 to 1998", slots:[fixed("tmp",12),
+      {type:"mix", key:"split", label:"Mix and match", sets:["sth","exo"], total:8}]},
+    {n:5, title:"Urza's Block", years:"1998 to 1999", slots:[fixed("usg",10), fixed("ulg",5), fixed("uds",5),
+      {type:"choice", key:"throwback", label:"Throwback (about 60 cards from one earlier set)", options:["2ed","leg","arn","atq","drk","ice","all","hml","fem","chr","mir","vis","wth","tmp","sth","exo"].map(c => opt(c, tb(c)))}]}
+  ];
+}
+// Keep only slots whose sets exist in the card data, and number rounds by position.
+function normalizeRounds(list){
+  return (list || []).map((R, i) => ({...R, n:i+1, slots:(R.slots || []).map(sl => {
+    if(sl.type === "fixed") return SETS[sl.set] && sl.packs > 0 ? sl : null;
+    if(sl.type === "choice"){ const options = (sl.options || []).filter(o => SETS[o.set] && o.packs > 0); return options.length ? {...sl, options} : null; }
+    if(sl.type === "mix") return (sl.sets || []).every(c => SETS[c]) && sl.sets.length === 2 && sl.total > 0 ? sl : null;
+    return null;
+  }).filter(Boolean)}));
+}
 
 /* ---------- util ---------- */
 const $ = s => document.querySelector(s);
@@ -147,20 +166,19 @@ function roundPullId(uid, n){ return `${uid}_r${n}`; }
 // Saved openings carry slot = that key; older whole-round openings have no slot and cover every slot.
 function slotPull(uid, n, key){ return state.pulls.find(p => p.player===uid && p.kind==="packs" && p.round===n && !p.voided && (!p.slot || p.slot===key)); }
 function roundSlots(R){
-  const out = R.lines.map(([s,n]) => ({key:`line-${s}`, kind:"Line", label:SETS[s].name, parts:[{set:s, packs:n}]}));
-  if(R.branch){
-    const done = ui.player && slotPull(ui.player, R.n, "branch");
-    const chosen = done && done.packs && done.packs[0] ? done.packs[0].s : (ui.branch[R.n] || R.branch.options[0][0]);
-    const o = R.branch.options.find(x=>x[0]===chosen) || R.branch.options[0];
-    out.push({key:"branch", kind:"Branch", label:SETS[o[0]].name, parts:[{set:o[0], packs:o[1]}]});
-  }
-  if(R.split){
-    const a = Math.max(0, Math.min(R.split.total, ui.split)); const parts = [];
-    if(a) parts.push({set:R.split.a, packs:a}); if(R.split.total-a) parts.push({set:R.split.b, packs:R.split.total-a});
-    out.push({key:"split", kind:"Mix and match", label:`${a} ${SETS[R.split.a].name} · ${R.split.total-a} ${SETS[R.split.b].name}`, parts});
-  }
-  if(R.throwback) out.push({key:"throwback", kind:"Throwback", label:SETS[ui.throwback].name, parts:[{set:ui.throwback, packs:throwbackPacks(ui.throwback)}]});
-  return out;
+  return R.slots.map(sl => {
+    const ck = `${R.n}:${sl.key}`;
+    if(sl.type === "fixed") return {key:sl.key, def:sl, kind:"Packs", label:SETS[sl.set].name, parts:[{set:sl.set, packs:sl.packs}]};
+    if(sl.type === "choice"){
+      const done = ui.player && slotPull(ui.player, R.n, sl.key);
+      const chosen = done && done.packs && done.packs[0] ? done.packs[0].s : (ui.choice[ck] || sl.options[0].set);
+      const o = sl.options.find(x => x.set === chosen) || sl.options[0];
+      return {key:sl.key, def:sl, kind:sl.label || "Branch", label:SETS[o.set].name, parts:[{set:o.set, packs:o.packs}]};
+    }
+    const [a, b] = sl.sets; const na = Math.max(0, Math.min(sl.total, ui.mix[ck] ?? Math.ceil(sl.total/2))); const parts = [];
+    if(na) parts.push({set:a, packs:na}); if(sl.total-na) parts.push({set:b, packs:sl.total-na});
+    return {key:sl.key, def:sl, kind:sl.label || "Mix and match", label:`${na} ${SETS[a].name} · ${sl.total-na} ${SETS[b].name}`, parts};
+  });
 }
 // Which slots are ticked for opening (defaults to every slot not opened yet).
 function selectedSlots(R){
@@ -170,7 +188,7 @@ function selectedSlots(R){
 }
 
 /* ---------- UI state ---------- */
-const ui = { tab:"open", player:null, round:1, branch:{}, split:4, throwback:"leg", extraSet:"2ed", extraCount:1, poolText:"", poolRound:1,
+const ui = { tab:"open", player:null, round:1, choice:{}, mix:{}, rdraft:null, rdirty:false, extraSet:"2ed", extraCount:1, poolText:"", poolRound:1,
   lastOpen:null, colPlayer:null, f:{q:"", colors:new Set(), type:"", rarity:"", set:"", cmd:"", hideBasics:true}, sort:"name",
   deckPlayer:null, deckText:"", deckCmd:"", deckResult:null, histOpen:new Set(), voidConfirm:null, removeConfirm:null, banDraft:null,
   busy:false, checks:null, revealIdx:0, revealDone:false, statsRound:null,
@@ -198,7 +216,7 @@ function planFor(){
   const r = ui.round;
   if(typeof r === "number"){
     const R = ROUNDS[r-1];
-    return selectedSlots(R).flatMap(sl => sl.parts.map(pt => ({kind:sl.kind, slot:sl.key, set:pt.set, packs:pt.packs})));
+    return selectedSlots(R).flatMap(sl => sl.parts.map(pt => ({kind:sl.kind, slot:sl.key, type:sl.def.type, set:pt.set, packs:pt.packs})));
   }
   if(r === "extra") return [{kind:"Extra", set:ui.extraSet, packs:Math.max(1, Math.min(60, ui.extraCount|0))}];
   if(r === "sim"){ const sets = simSets(); if(!sets.includes(ui.simSet)) ui.simSet = sets[0]; return [{kind:"Practice", set:ui.simSet, packs:Math.max(1, Math.min(20, ui.simCount|0))}]; }
@@ -221,18 +239,15 @@ function renderOpen(){
       const done = ui.player && slotPull(ui.player, R.n, sl.key);
       const packs = sl.parts.reduce((a,p)=>a+p.packs,0), cards = sl.parts.reduce((a,p)=>a+p.packs*SETS[p.set].size,0);
       let opts = "";
-      if(!done && sl.key==="branch"){
+      if(!done && sl.def.type === "choice"){
         const ch = sl.parts[0].set;
-        opts = `<div class="opts">${R.branch.options.map(([s,n,why]) => `<label class="opt"><input type="radio" name="branch" value="${s}" ${s===ch?"checked":""} ${ui.pending?"disabled":""}> <span>${esc(SETS[s].name)} <span class="muted">(${n} packs)</span><br><span class="why">${esc(why)}</span></span></label>`).join("")}</div>`;
+        opts = `<div class="opts">${sl.def.options.map(o => `<label class="opt"><input type="radio" name="choice-${sl.key}" data-choice="${sl.key}" value="${o.set}" ${o.set===ch?"checked":""} ${ui.pending?"disabled":""}> <span>${esc(SETS[o.set].name)} <span class="muted">(${o.packs} pack${o.packs>1?"s":""})</span>${o.note ? `<br><span class="why">${esc(o.note)}</span>` : ""}</span></label>`).join("")}</div>`;
       }
-      if(!done && sl.key==="split"){
-        const a = sl.parts.find(p=>p.set===R.split.a)?.packs || 0;
-        opts = `<div class="opts"><label for="splitRange" class="small">${esc(SETS[R.split.a].name)} packs: <b>${a}</b></label><input id="splitRange" type="range" min="0" max="${R.split.total}" step="1" value="${a}"><span class="why">Stronghold: Slivers, Spikes, Sliver Queen. Exodus: Coat of Arms, Soul Warden, Mirri.</span></div>`;
+      if(!done && sl.def.type === "mix"){
+        const [a, b] = sl.def.sets; const na = sl.parts.find(p=>p.set===a)?.packs || 0;
+        opts = `<div class="opts"><label for="mix-${sl.key}" class="small">${esc(SETS[a].name)} <b>${na}</b> · ${esc(SETS[b].name)} <b>${sl.def.total-na}</b></label><input id="mix-${sl.key}" data-mix="${sl.key}" type="range" min="0" max="${sl.def.total}" step="1" value="${na}" ${ui.pending?"disabled":""}></div>`;
       }
-      if(!done && sl.key==="throwback"){
-        opts = `<div class="opts"><select id="throwSel" aria-label="Throwback set">${R.throwback.sets.map(s => `<option value="${s}" ${s===ui.throwback?"selected":""}>${esc(SETS[s].name)} (${throwbackPacks(s)} packs)</option>`).join("")}</select></div>`;
-      }
-      const label = sl.key==="branch" && !done ? `${esc(R.branch.label)}` : esc(sl.kind);
+      const label = !done && sl.def.type === "choice" ? `${esc(sl.kind)}: pick one` : esc(sl.kind);
       return `<div class="slot ${done?"done":""}">
         <label class="slotpick">${done ? `<span class="tick" aria-hidden="true">✓</span>` : `<input type="checkbox" data-slot="${sl.key}" ${selKeys.has(sl.key)?"checked":""} ${ui.pending?"disabled":""} aria-label="Open ${esc(sl.label)}">`}
           <div><div class="k">${label}</div><div class="n">${esc(sl.label)}</div>${done ? `<div class="small muted">Opened ${esc(fmtDate(done.created))}</div>` : ""}</div></label>
@@ -410,7 +425,7 @@ async function doSaveOpen(){
       id = `${roundPullId(P.player, P.round)}_${g.key}`;
       if(isAdmin() && state.pulls.some(p => p.id === id)) id = `${id}_${rid()}`; // admin redo after a void
       const sl = P.slots.find(x => x.slot === g.key);
-      label = `Round ${P.round} · ${sl.kind === "Line" ? SETS[sl.set].name : sl.kind === "Branch" ? `Branch: ${SETS[sl.set].name}` : sl.kind}`;
+      label = `Round ${P.round} · ${sl.type === "fixed" ? SETS[sl.set].name : sl.type === "choice" ? `${sl.kind}: ${SETS[sl.set].name}` : sl.kind}`;
     } else id = `${P.player}_extra_${rid()}`;
     const plan = Object.entries(g.packs.reduce((a,pk)=>(a[pk.s]=(a[pk.s]||0)+1,a),{})).map(([s,n]) => `${n} ${SETS[s].name}`).join(", ");
     const pull = {player:P.player, round:P.round, kind:P.kind, label, plan, rerolls:P.rerolls, created:new Date().toISOString(), packs:g.packs.map(strip), voided:false};
@@ -705,12 +720,115 @@ function renderSets(){
   </div>`;
 }
 
+function slotPacks(sl){ return sl.type === "fixed" ? sl.packs : sl.type === "choice" ? sl.options[0].packs : sl.total; }
+function roundSummary(R){
+  return R.slots.map(sl => sl.type === "fixed" ? `${sl.packs} ${SETS[sl.set].name}`
+    : sl.type === "choice" ? `${sl.label || "Branch"}: one of ${sl.options.map(o => `${o.packs} ${SETS[o.set].name}`).join(" / ")}`
+    : `${sl.total} split between ${SETS[sl.sets[0]].name} and ${SETS[sl.sets[1]].name}`).join("; ");
+}
+
+/* ---------- Rounds editor (admin) ---------- */
+const clone = x => JSON.parse(JSON.stringify(x));
+function draft(){ if(!ui.rdraft){ ui.rdraft = clone(ROUNDS); ui.rdirty = false; } return ui.rdraft; }
+function openedKeys(n){ return new Set(state.pulls.filter(p => p.kind === "packs" && p.round === n && !p.voided).map(p => p.slot || "*")); }
+function setOptions(sel){ return SET_ORDER.filter(c => c !== "3ed").map(c => `<option value="${c}" ${c===sel?"selected":""}>${esc(SETS[c].name)} (${SETS[c].size}-card packs)</option>`).join(""); }
+// Give new slots a stable key the rules accept: line-<set>[n], branch / choiceN, split / mixN.
+function assignKeys(R){
+  // Existing keys stay as they are (saved openings point at them); only new or duplicate slots get one.
+  const used = new Set(), keep = new Set();
+  for(const sl of R.slots) if(sl.key && !used.has(sl.key)){ used.add(sl.key); keep.add(sl); }
+  for(const sl of R.slots){
+    if(keep.has(sl)) continue;
+    let base = sl.type === "fixed" ? `line-${sl.set}` : sl.type === "choice" ? "branch" : "split";
+    let key = base, k = 2;
+    while(used.has(key)) key = sl.type === "fixed" ? `${base}${k++}` : `${sl.type === "choice" ? "choice" : "mix"}${k++}`;
+    sl.key = key; used.add(key);
+  }
+}
+function validateRounds(list){
+  const errs = [];
+  list.forEach((R, i) => {
+    const n = i + 1;
+    if(!R.slots.length) errs.push(`Round ${n} has no packs.`);
+    R.slots.forEach((sl, j) => {
+      const where = `Round ${n}, item ${j+1}`;
+      const okNum = x => Number.isInteger(x) && x >= 1 && x <= 60;
+      if(sl.type === "fixed" && !okNum(sl.packs)) errs.push(`${where}: packs must be 1 to 60.`);
+      if(sl.type === "choice"){ if(!sl.options.length) errs.push(`${where}: add at least one option.`); sl.options.forEach(o => { if(!okNum(o.packs)) errs.push(`${where}: each option needs 1 to 60 packs.`); }); }
+      if(sl.type === "mix"){ if(sl.sets[0] === sl.sets[1]) errs.push(`${where}: pick two different sets.`); if(!okNum(sl.total)) errs.push(`${where}: total must be 1 to 60.`); }
+    });
+  });
+  return errs;
+}
+function renderRounds(){
+  const v = $("#view-rounds");
+  if(!isAdmin()){ v.innerHTML = `<div class="empty"><b>Only the admin can edit rounds.</b></div>`; return; }
+  const D = draft();
+  const cardsOf = sl => sl.type === "fixed" ? sl.packs*SETS[sl.set].size : sl.type === "choice" ? sl.options.map(o=>o.packs*SETS[o.set].size) : sl.total*SETS[sl.sets[0]].size;
+  const num = (attrs, val, w=64) => `<input type="number" min="1" max="60" value="${val}" ${attrs} style="width:${w}px">`;
+  v.innerHTML = `<div class="stack" style="gap:16px">
+    <div class="panel roundbar">
+      <div><h2>Rounds</h2><p class="small muted">Build each round from packs. <b>Packs</b>: everyone opens them. <b>Branch</b>: each player picks one option. <b>Mix</b>: each player splits a number of packs between two sets. Players see a round when you unlock it in Players &amp; bans.</p></div>
+      <div class="row">${ui.rdirty ? `<span class="badge cmd">Unsaved changes</span>` : `<span class="small muted">All changes saved</span>`}
+        <button class="btn" id="rDiscard" ${ui.rdirty?"":"disabled"}>Discard changes</button>
+        <button class="btn primary" id="rSave" ${ui.rdirty&&!ui.busy?"":"disabled"}>Save rounds</button></div>
+    </div>
+    ${D.map((R, ri) => {
+      const n = ri + 1; const opened = openedKeys(n); const isUnlocked = n <= unlocked();
+      const packs = R.slots.reduce((a,sl)=>a+slotPacks(sl),0);
+      return `<div class="panel">
+        <div class="row" style="justify-content:space-between">
+          <div class="row"><h2>Round ${n}</h2><span class="badge ${isUnlocked?"cmd":"void"}">${isUnlocked?"Unlocked":"Locked"}</span>${opened.size ? `<span class="small muted">${state.pulls.filter(p=>p.kind==="packs"&&p.round===n&&!p.voided).length} openings saved</span>` : ""}</div>
+          ${ri === D.length-1 && !opened.size && D.length > 1 ? (ui.removeRound ? `<span class="confirm">Delete Round ${n}? <button class="btn danger" id="rDelYes">Delete</button><button class="btn" id="rDelNo">Cancel</button></span>` : `<button class="btn danger" id="rDel">Delete round</button>`) : ""}
+        </div>
+        <div class="row"><label>Title <input type="text" data-ri="${ri}" data-f="title" value="${esc(R.title||"")}" maxlength="60"></label>
+          <label>Years <input type="text" data-ri="${ri}" data-f="years" value="${esc(R.years||"")}" maxlength="30" style="width:140px"></label>
+          <span class="small muted">About ${packs} packs per player</span></div>
+        <div class="stack">${R.slots.map((sl, si) => {
+          const locked = sl.key && opened.has(sl.key) || opened.has("*");
+          const at = `data-ri="${ri}" data-si="${si}"`;
+          const head = `<div class="row" style="justify-content:space-between"><b class="k">${sl.type==="fixed"?"Packs":sl.type==="choice"?"Branch: pick one":"Mix two sets"}</b>
+            ${locked ? `<span class="small muted">Already opened by a player, so its sets and counts are locked</span>` : `<button class="link" ${at} data-act="delSlot">Remove</button>`}</div>`;
+          if(sl.type === "fixed") return `<div class="slot edit">${head}<div class="row"><select ${at} data-f="set" ${locked?"disabled":""}>${setOptions(sl.set)}</select> × ${num(`${at} data-f="packs" ${locked?"disabled":""}`, sl.packs)} packs <span class="small muted">${cardsOf(sl)} cards</span></div></div>`;
+          if(sl.type === "mix") return `<div class="slot edit">${head}<div class="row"><label>Label <input type="text" ${at} data-f="label" value="${esc(sl.label||"")}" maxlength="60"></label></div>
+            <div class="row">${num(`${at} data-f="total" ${locked?"disabled":""}`, sl.total)} packs split between <select ${at} data-f="setA" ${locked?"disabled":""}>${setOptions(sl.sets[0])}</select> and <select ${at} data-f="setB" ${locked?"disabled":""}>${setOptions(sl.sets[1])}</select></div></div>`;
+          return `<div class="slot edit">${head}<div class="row"><label>Label <input type="text" ${at} data-f="label" value="${esc(sl.label||"")}" maxlength="60" placeholder="Branch"></label></div>
+            <div class="stack">${sl.options.map((o, oi) => `<div class="row optrow"><select ${at} data-oi="${oi}" data-f="oset" ${locked?"disabled":""}>${setOptions(o.set)}</select> × ${num(`${at} data-oi="${oi}" data-f="opacks" ${locked?"disabled":""}`, o.packs)} packs
+              <input type="text" ${at} data-oi="${oi}" data-f="onote" value="${esc(o.note||"")}" placeholder="Note for players (optional)" maxlength="80" style="flex:1;min-width:140px">
+              ${locked || sl.options.length < 2 ? "" : `<button class="link" ${at} data-oi="${oi}" data-act="delOpt">Remove</button>`}</div>`).join("")}</div>
+            ${locked ? "" : `<button class="link" ${at} data-act="addOpt">+ Add option</button>`}</div>`;
+        }).join("") || `<p class="muted small">No packs yet.</p>`}</div>
+        <div class="row"><button class="btn" data-ri="${ri}" data-act="addFixed">+ Packs</button><button class="btn" data-ri="${ri}" data-act="addChoice">+ Branch</button><button class="btn" data-ri="${ri}" data-act="addMix">+ Mix two sets</button></div>
+      </div>`;
+    }).join("")}
+    <div class="row"><button class="btn" id="rAdd">+ Add round</button>${isAdmin() ? `<button class="btn" id="rDefault">Reset to the original 5 rounds</button>` : ""}</div>
+    <p class="small muted">Only sets with card data can be used (the 20 sets from 1993 to 1999). Ask Claude to add newer sets.</p>
+  </div>`;
+}
+function editRounds(t){
+  const D = draft(); const ri = +t.dataset.ri, si = +t.dataset.si, oi = +t.dataset.oi; const R = D[ri]; const sl = R && R.slots[si];
+  const f = t.dataset.f; const v = t.value; const n = Math.max(1, Math.min(60, parseInt(v,10) || 1));
+  if(f === "title") R.title = v; else if(f === "years") R.years = v;
+  else if(f === "set") sl.set = v; else if(f === "packs") sl.packs = n;
+  else if(f === "label") sl.label = v; else if(f === "total") sl.total = n;
+  else if(f === "setA") sl.sets[0] = v; else if(f === "setB") sl.sets[1] = v;
+  else if(f === "oset") sl.options[oi].set = v; else if(f === "opacks") sl.options[oi].packs = n; else if(f === "onote") sl.options[oi].note = v;
+  ui.rdirty = true;
+}
+async function saveRounds(){
+  const D = draft(); const errs = validateRounds(D);
+  if(errs.length){ toast(errs.slice(0,3).join(" ")); return; }
+  D.forEach((R, i) => { R.n = i + 1; if(!R.title) R.title = `Round ${i+1}`; assignKeys(R); });
+  ui.busy = true; renderRounds();
+  const ok = await guarded(() => backend.saveRounds(clone(D)), "Rounds saved");
+  ui.busy = false;
+  if(ok){ ui.rdraft = null; ui.rdirty = false; ui.sel = {}; }
+  renderRounds();
+}
+
 /* ---------- Stats ---------- */
 function roundSets(R){
-  const s = R.lines.map(([c])=>c);
-  if(R.branch) s.push(...R.branch.options.map(o=>o[0]));
-  if(R.split) s.push(R.split.a, R.split.b);
-  return [...new Set(s)];
+  return [...new Set(R.slots.flatMap(sl => sl.type === "fixed" ? [sl.set] : sl.type === "choice" ? sl.options.map(o=>o.set) : sl.sets))];
 }
 function renderStats(){
   const v = $("#view-stats");
@@ -784,7 +902,7 @@ function renderTable(){
       ${admin ? `<div class="row"><button class="btn primary" id="banSave">Save ban list</button><span class="small muted">${bans().length} banned</span></div>` : `<span class="small muted">${bans().length} banned</span>`}
     </div>
     <div class="panel"><h2>Round plan</h2>
-      <div class="kv">${visibleRounds().map(R => `<b>R${R.n}</b><span>${R.lines.map(([s,n])=>`${n} ${esc(SETS[s].name)}`).join(", ")}${R.branch?`, then 1 of ${R.branch.options.map(o=>esc(SETS[o[0]].name)).join(" / ")}`:""}${R.split?", then 8 Stronghold/Exodus in any split":""}${R.throwback?", then about 60 cards from one earlier set":""}</span>`).join("")}</div>
+      <div class="kv">${visibleRounds().map(R => `<b>R${R.n}</b><span>${esc(R.title)}: ${esc(roundSummary(R))}</span>`).join("")}</div>
       <p class="small muted">Booster contents follow each set's real print sheets and slot counts.</p>
     </div></div>`;
 }
@@ -820,7 +938,7 @@ function renderWho(){
 }
 function showGate(html){
   $("#view-gate").innerHTML = html; $("#view-gate").hidden = false; $("#tabs").hidden = true;
-  ["open","collection","sets","deck","stats","history","table"].forEach(k => $("#view-"+k).hidden = true);
+  ["open","collection","sets","deck","stats","history","table","rounds"].forEach(k => $("#view-"+k).hidden = true);
 }
 function renderGate(){
   if(!backend.configured()){
@@ -846,12 +964,16 @@ function renderAll(){
   renderWho();
   if(renderGate()) return;
   ensureSelections();
-  ["open","collection","sets","deck","stats","history","table"].forEach(k => $("#view-"+k).hidden = k!==ui.tab);
+  const rt = document.querySelector('[data-tab="rounds"]'); if(rt) rt.hidden = !isAdmin();
+  if(ui.tab === "rounds" && !isAdmin()) ui.tab = "open";
+  if(typeof ui.round === "number" && ui.round > ROUNDS.length) ui.round = Math.max(1, Math.min(unlocked(), ROUNDS.length));
+  ["open","collection","sets","deck","stats","history","table","rounds"].forEach(k => $("#view-"+k).hidden = k!==ui.tab);
   document.querySelectorAll("#tabs button").forEach(b => b.setAttribute("aria-selected", String(b.dataset.tab===ui.tab)));
   if(ui.tab==="open") renderOpen();
   if(ui.tab==="collection") renderCollection();
   if(ui.tab==="deck") renderDeck();
   if(ui.tab==="sets") renderSets();
+  if(ui.tab==="rounds") renderRounds();
   if(ui.tab==="stats") renderStats();
   if(ui.tab==="history") renderHistory();
   if(ui.tab==="table") renderTable();
@@ -883,6 +1005,24 @@ document.addEventListener("click", async ev => {
   if(d.statsround){ ui.statsRound = d.statsround === "all" ? "all" : +d.statsround; return renderStats(); }
   if(t.id==="poolSave") return doAdjust();
   if(t.id==="simBtn") return doSim();
+  if(d.act && ui.tab==="rounds"){
+    const D = draft(); const R = D[+d.ri]; const sl = R.slots[+d.si];
+    const first = SET_ORDER.find(c => c !== "3ed");
+    if(d.act==="addFixed") R.slots.push({type:"fixed", set:first, packs:10});
+    if(d.act==="addChoice") R.slots.push({type:"choice", label:"Branch", options:[{set:first, packs:5, note:""}, {set:SET_ORDER[2], packs:5, note:""}]});
+    if(d.act==="addMix") R.slots.push({type:"mix", label:"Mix and match", sets:[first, SET_ORDER[2]], total:8});
+    if(d.act==="delSlot") R.slots.splice(+d.si, 1);
+    if(d.act==="addOpt") sl.options.push({set:first, packs:5, note:""});
+    if(d.act==="delOpt") sl.options.splice(+d.oi, 1);
+    ui.rdirty = true; return renderRounds();
+  }
+  if(t.id==="rAdd"){ const D = draft(); D.push({n:D.length+1, title:`Round ${D.length+1}`, years:"", slots:[]}); ui.rdirty = true; return renderRounds(); }
+  if(t.id==="rDel"){ ui.removeRound = true; return renderRounds(); }
+  if(t.id==="rDelNo"){ ui.removeRound = false; return renderRounds(); }
+  if(t.id==="rDelYes"){ ui.removeRound = false; draft().pop(); ui.rdirty = true; return renderRounds(); }
+  if(t.id==="rDiscard"){ ui.rdraft = null; ui.rdirty = false; return renderRounds(); }
+  if(t.id==="rDefault"){ const keep = draft(); ui.rdraft = normalizeRounds(defaultRounds()); for(let i = ui.rdraft.length; i < keep.length; i++) if(state.pulls.some(p=>p.round===i+1&&p.kind==="packs"&&!p.voided)) ui.rdraft.push(keep[i]); ui.rdirty = true; return renderRounds(); }
+  if(t.id==="rSave") return saveRounds();
   if(t.id==="selAll" || t.id==="selNone"){ const R = ROUNDS[ui.round-1]; ui.sel[R.n] = new Set(t.id==="selAll" ? roundSlots(R).filter(sl => !slotPull(ui.player, R.n, sl.key)).map(sl=>sl.key) : []); return renderOpen(); }
   if(t.id==="saveOpen") return doSaveOpen();
   if(t.id==="rerollOpen") return doReroll();
@@ -911,8 +1051,13 @@ document.addEventListener("click", async ev => {
 document.addEventListener("change", ev => {
   const t = ev.target;
   if(t.dataset.slot){ const set = ui.sel[ui.round] || new Set(); t.checked ? set.add(t.dataset.slot) : set.delete(t.dataset.slot); ui.sel[ui.round] = set; return renderOpen(); }
-  if(t.name==="branch"){ ui.branch[ui.round] = t.value; return renderOpen(); }
-  if(t.id==="throwSel"){ ui.throwback = t.value; return renderOpen(); }
+  if(t.dataset.ri !== undefined && t.dataset.f && ui.tab==="rounds"){
+    editRounds(t);
+    // Re-render only for dropdowns: re-rendering on a text/number blur would swallow the click that caused it.
+    if(t.tagName === "SELECT") return renderRounds();
+    const sv = $("#rSave"), dc = $("#rDiscard"); if(sv) sv.disabled = false; if(dc) dc.disabled = false; return;
+  }
+  if(t.dataset.choice){ ui.choice[`${ui.round}:${t.dataset.choice}`] = t.value; return renderOpen(); }
   if(t.id==="extraSet"){ ui.extraSet = t.value; return renderOpen(); }
   if(t.id==="extraCount"){ ui.extraCount = Math.max(1, Math.min(60, +t.value||1)); return renderOpen(); }
   if(t.id==="poolRound"){ ui.poolRound = +t.value; return; }
@@ -935,7 +1080,8 @@ document.addEventListener("change", ev => {
 });
 document.addEventListener("input", ev => {
   const t = ev.target;
-  if(t.id==="splitRange"){ ui.split = +t.value; return keepFocus(renderOpen); }
+  if(t.dataset.ri !== undefined && t.dataset.f && ui.tab==="rounds" && (t.type === "text" || t.type === "number")){ editRounds(t); const sv = $("#rSave"), dc = $("#rDiscard"); if(sv) sv.disabled = false; if(dc) dc.disabled = false; return; }
+  if(t.dataset.mix){ ui.mix[`${ui.round}:${t.dataset.mix}`] = +t.value; return keepFocus(renderOpen); }
   if(t.id==="sbQ"){ ui.sb.q = t.value; clearTimeout(ui._sq); ui._sq = setTimeout(()=>keepFocus(renderSets), 180); return; }
   if(t.id==="fq"){ ui.f.q = t.value; clearTimeout(ui._qt); ui._qt = setTimeout(()=>keepFocus(renderCollection), 180); return; }
   if(t.id==="poolText"){ ui.poolText = t.value; return; }
@@ -963,10 +1109,11 @@ async function boot(){
   if(odds) ODDS = odds;
   CARDS = DATA.cards.map(c => ({name:c[0], mana:c[1], type:c[2], pt:c[3], text:c[4], ci:c[5]}));
   DATA.sets.forEach(s => SETS[s.code] = s); SET_ORDER = DATA.sets.map(s => s.code);
+  ROUNDS = normalizeRounds(defaultRounds());
   CARDS.forEach((c,i) => BY_NAME.set(NORM(c.name), i));
   for(const [code, o] of Object.entries(ODDS.sets)) TARGETS[code] = new Set(o.targets.map(t => BY_NAME.get(NORM(t.name))).filter(i => i !== undefined));
   const startTab = (location.hash||"").slice(1);
-  if(["open","collection","sets","deck","stats","history","table"].includes(startTab)) ui.tab = startTab;
+  if(["open","collection","sets","deck","stats","history","table","rounds"].includes(startTab)) ui.tab = startTab;
   if(!backend.init()){ renderAll(); return; }
   let unsub = null;
   backend.onAuth(async user => {
@@ -974,8 +1121,8 @@ async function boot(){
     state.me = user; state.loaded = false; state.players = []; state.pulls = []; state.settings = null; ui.lastOpen = null; ui.checks = null;
     renderAll();
     if(!user) return;
-    let got = 0; const mark = () => { if(++got >= 3 && !state.loaded){ state.loaded = true; } };
-    let seen = {players:false, pulls:false, settings:false};
+    let got = 0; const mark = () => { if(++got >= 4 && !state.loaded){ state.loaded = true; } };
+    let seen = {players:false, pulls:false, settings:false, rounds:false};
     const ready = k => { if(!seen[k]){ seen[k]=true; mark(); } };
     unsub = backend.subscribe({
       players: list => { state.players = list; ready("players"); renderAll(); },
@@ -987,6 +1134,7 @@ async function boot(){
         if(s && typeof ui.round === "number" && ui.round > s.unlockedRound && !isAdmin()) ui.round = s.unlockedRound;
         renderAll();
       },
+      rounds: r => { ROUNDS = r && Array.isArray(r.rounds) && r.rounds.length ? normalizeRounds(r.rounds) : normalizeRounds(defaultRounds()); ready("rounds"); renderAll(); },
       onError: e => { console.error(e); toast(friendly(e)); }
     });
   });

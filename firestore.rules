@@ -14,7 +14,7 @@ service cloud.firestore {
       return get(/databases/$(database)/documents/config/settings).data.unlockedRound;
     }
 
-    // Round unlock + ban list. Everyone signed in reads, only the admin writes.
+    // Round unlock, ban list and the round plan (config/rounds). Everyone signed in reads, only the admin writes.
     match /config/{docId} {
       allow read: if signedIn();
       allow write: if isAdmin();
@@ -49,7 +49,7 @@ service cloud.firestore {
             && request.resource.data.round <= unlockedRound()
             && request.resource.data.slot is string
             && pullId == request.auth.uid + '_r' + string(request.resource.data.round) + '_' + request.resource.data.slot
-            && request.resource.data.slot.matches('line-[a-z0-9]+|branch|split|throwback'))
+            && request.resource.data.slot.matches('line-[a-z0-9]+|branch|split|throwback|choice[0-9]+|mix[0-9]+'))
           ||
           // Cards the player adds (shared-pool picks, round prizes) or removes themselves.
           (request.resource.data.kind in ['pool', 'add', 'remove']

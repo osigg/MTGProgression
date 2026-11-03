@@ -25,14 +25,16 @@ export function signIn(){ return signInWithPopup(auth, new GoogleAuthProvider())
 export function signOut(){ return fbSignOut(auth); }
 
 // Live data. Each callback gets plain objects; onError gets an Error with .code.
-export function subscribe({players, pulls, settings, onError}){
+export function subscribe({players, pulls, settings, rounds, onError}){
   const u1 = onSnapshot(query(collection(db, "players"), orderBy("created")),
     s => players(s.docs.map(d => ({id:d.id, ...d.data()}))), onError);
   const u2 = onSnapshot(query(collection(db, "pulls"), orderBy("created")),
     s => pulls(s.docs.map(d => ({id:d.id, ...d.data()}))), onError);
   const u3 = onSnapshot(doc(db, "config", "settings"),
     s => settings(s.exists() ? s.data() : null), onError);
-  return () => { u1(); u2(); u3(); };
+  const u4 = onSnapshot(doc(db, "config", "rounds"),
+    s => rounds(s.exists() ? s.data() : null), onError);
+  return () => { u1(); u2(); u3(); u4(); };
 }
 
 export const savePlayer   = (uid, data) => setDoc(doc(db, "players", uid), data, {merge:true});
@@ -40,4 +42,5 @@ export const deletePlayer = uid => deleteDoc(doc(db, "players", uid));
 export const createPull   = (id, data) => setDoc(doc(db, "pulls", id), data);
 export const updatePull   = (id, patch) => updateDoc(doc(db, "pulls", id), patch);
 export const saveSettings = patch => setDoc(doc(db, "config", "settings"), patch, {merge:true});
+export const saveRounds   = list => setDoc(doc(db, "config", "rounds"), {rounds: list, updated: new Date().toISOString()});
 export const pullExists   = async id => (await getDoc(doc(db, "pulls", id))).exists();

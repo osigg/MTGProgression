@@ -55,6 +55,14 @@ Hosting is GitHub Pages (free). Data and sign-in are Firebase on the free Spark 
 - Shared-pool picks and prizes go in **Open packs > Add / remove cards**, one per line with a count and edition: `2 Sol Ring (2ed) 270`.
 - Bans go in **Players & bans > Ban list**. Collections and deck checks flag banned cards.
 
+## Customizing rounds (admin)
+The **Rounds** tab (admin only) is where you build each round from packs:
+- **Packs**: a set and a number of packs that everyone opens.
+- **Branch**: two or more options (set, packs, an optional note); each player picks one. A round can have several branches; the throwback in round 5 is one.
+- **Mix two sets**: a number of packs each player splits between two sets (like Stronghold/Exodus).
+
+Add rounds with **+ Add round**, then **Save rounds**. Players see a round once you unlock it in **Players & bans**. Anything a player has already opened is locked in the editor, and the last round can only be deleted while nobody has opened it. **Reset to the original 5 rounds** brings back the starting plan (keeping any extra round that already has openings). The plan is stored in Firestore at `config/rounds`; until it's saved the first time, the site uses the original 5 rounds.
+
 ## Opening, stats and targets
 - **Reveal**: choose *One pack at a time* (Next / Previous / Skip to all) or *All at once*. Either way, every pack is saved the moment you click Open, so closing the tab mid-reveal can't re-roll anything. The choice is remembered per browser.
 - **What to expect** (Open packs tab): for each set in the round, the real pack layout, how often a pack holds 0, 1 or 2 rares, and the target cards with their odds, marked *Owned* if you already have one.
@@ -69,10 +77,8 @@ Hosting is GitHub Pages (free). Data and sign-in are Firebase on the free Spark 
 ## Exporting to Archidekt and Tabletop Simulator
 **Collections > Copy list** gives lines like `1x Force of Will (all) 28`. Paste them into Archidekt's collection import or a new deck. Then export the finished deck from Archidekt or Moxfield and load it into Tabletop Simulator with a deck importer such as [tts-deckconverter](https://github.com/jeandeaual/tts-deckconverter).
 
-## Adding rounds
-1. Add the new sets to `data/cards.json` (same structure as the existing sets: booster slots, sheets with weights, rarity and collector number per card).
-2. Add a round entry to the `ROUNDS` list near the top of `js/app.js`.
-3. Push. GitHub Pages updates in about a minute. Collections live in Firebase, so updates never touch them.
+## Adding newer sets
+Rounds are edited in the Rounds tab, but they can only use sets that have card data. To add sets past 1999, add them to `data/cards.json` (booster slots, sheets with weights, rarity and collector number per card), regenerate `data/odds.json` with `node tools/odds.js`, and push.
 
 ## Updating the database rules
 Whenever `firestore.rules` changes in this repo, paste the whole file into **Firestore > Rules** in the Firebase console and click **Publish**. The site checks the rules on every save, so new features that write new kinds of entries won't work until the new rules are published.

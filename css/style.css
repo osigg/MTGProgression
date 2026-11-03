@@ -202,3 +202,8 @@ td.ok{color:var(--good)} td.no{color:var(--muted)}
 .slot .slotpick input{margin-top:3px;width:18px;height:18px;accent-color:var(--accent)}
 .slot.done{opacity:.75}
 .slot .tick{color:var(--good);font-weight:700;width:18px;text-align:center}
+.roundbar{flex-direction:row;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;position:sticky;top:calc(env(safe-area-inset-top,0px) + 96px);z-index:4}
+.roundbar > div:first-child{max-width:640px}
+.slot.edit{display:flex;flex-direction:column;gap:8px}
+.slot.edit input[type=text]{min-width:0}
+.optrow{background:var(--surface);border-radius:6px;padding:6px 8px}
