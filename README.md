@@ -47,7 +47,7 @@ Hosting is GitHub Pages (free). Data and sign-in are Firebase on the free Spark 
 - **Opening a round**: tick which parts to open (each line set, the branch, the Stronghold/Exodus split, the throwback). You can open all 10 Unlimited now and Legends or your branch later, or tick everything at once. Each part can be added once; the branch choice locks when it's added.
 - **Add or reroll**: opened packs are not saved until you click **Add to collection**. **Reroll** replaces every waiting pack. History shows how many times an opening was rerolled.
 - **Practice packs**: open 1 to 20 packs of any unlocked set just to see what comes out. Nothing is saved.
-- **Add / remove cards**: players add cards (shared-pool picks, round prizes) or remove them (corrections) with a reason; every change is logged in History.
+- **Add / remove cards**: players add cards (shared-pool picks, round prizes) or remove them (corrections) with a reason; every change is logged in History. In **Remove cards**, picking a round shows that player's cards from that round; click a card to add it to the removal list (click again for another copy).
 
 ### Round basics
 - Players see and open only rounds up to the unlocked one. When everyone's done, the admin clicks **Unlock Round N** in **Players & bans**.

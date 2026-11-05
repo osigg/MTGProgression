@@ -136,9 +136,10 @@ async function guarded(fn, okMsg){ try { await fn(); if(okMsg) toast(okMsg); ret
 /* ---------- derived ---------- */
 function playerName(id){ const p = state.players.find(x=>x.id===id); return p ? p.name : "Unknown player"; }
 function livePulls(pid){ return state.pulls.filter(p => p.player===pid && !p.voided); }
-function collectionOf(pid){
+// round (optional): only count what came in, or went out, during that round.
+function collectionOf(pid, round){
   const m = new Map();
-  const pulls = livePulls(pid).slice().sort((a,b) => (a.created||"").localeCompare(b.created||""));
+  const pulls = livePulls(pid).filter(p => round === undefined || p.round === round).sort((a,b) => (a.created||"").localeCompare(b.created||""));
   for(const pull of pulls){
     for(const pk of pull.packs || []){
       pk.c.forEach((nm, j) => {
@@ -194,7 +195,7 @@ const ui = { tab:"open", player:null, round:1, choice:{}, mix:{}, rdraft:null, r
   busy:false, checks:null, revealIdx:0, revealDone:false, statsRound:null,
   revealMode: (() => { try { return localStorage.getItem("ppo-reveal") || "one"; } catch(e){ return "one"; } })(),
   images: (() => { try { return localStorage.getItem("ppo-images") !== "off"; } catch(e){ return true; } })(),
-  pending:null, sel:{}, simSet:null, simCount:3, adjMode:"add", adjReason:"Shared pool pick",
+  pending:null, sel:{}, rmQ:"", rmHideBasics:true, simSet:null, simCount:3, adjMode:"add", adjReason:"Shared pool pick",
   sb:{set:null, sort:"rarity", q:"", rarity:"", color:"", targets:false, own:"", hideBasics:true} };
 
 function ensureSelections(){
@@ -302,7 +303,7 @@ function renderOpen(){
       ${typeof ui.round==="number" || ui.round==="extra" || ui.round==="sim" ? expectHTML(planFor()) : ""}
       ${ui.round==="sim" ? "" : ui.round==="pool" ? `<p class="small muted">Every add and remove is logged in History with its reason. The admin can void a mistake.</p>` : `<p class="small muted">Opening rolls the packs first. Look through them, then choose <b>Add to collection</b> or <b>Reroll</b>. Nothing is saved until you add, and each player adds one opening per round.</p>`}
     </div>
-    <div class="stack">${resultHTML()}</div>
+    <div class="stack">${ui.round === "pool" && ui.adjMode === "remove" ? removePickerHTML() : resultHTML()}</div>
   </div>`;
 }
 function resultHTML(){
@@ -442,6 +443,58 @@ async function doSaveOpen(){
   }
   renderOpen();
 }
+// Remove mode: the player's cards from the chosen round, click to queue them for removal.
+function queuedRemovals(){
+  const q = new Map();
+  for(const l of parseCardLines(ui.poolText)){ const k = `${NORM(l.name)}|${l.set}`; q.set(k, (q.get(k)||0) + l.qty); }
+  return q;
+}
+function removePickerHTML(){
+  if(!ui.player) return `<div class="empty"><b>Pick a player first.</b></div>`;
+  const who = playerName(ui.player);
+  const inRound = collectionOf(ui.player, ui.poolRound), owned = collectionOf(ui.player);
+  const q = queuedRemovals();
+  const items = [];
+  for(const e of inRound.values()){
+    const all = owned.get(NORM(e.name)); if(!all) continue;
+    for(const [code, n] of Object.entries(e.sets)){
+      const have = Math.min(n, all.sets[code] || 0); if(have <= 0) continue;
+      const set = code === "pool" ? "" : code;
+      const queued = (q.get(`${NORM(e.name)}|${set}`) || 0);
+      items.push({name:e.name, idx:e.idx, set, num: e.nums[code] || "", have, queued, best:e.best});
+    }
+  }
+  const f = NORM(ui.rmQ || "");
+  const shown = items.filter(x => !f || NORM(x.name).includes(f) || (x.idx>=0 && NORM(CARDS[x.idx].type).includes(f)))
+    .filter(x => !ui.rmHideBasics || x.idx < 0 || !isBasic(CARDS[x.idx]))
+    .sort((a,b) => RANK[a.best]-RANK[b.best] || a.name.localeCompare(b.name));
+  const total = items.reduce((a,x)=>a+x.have, 0);
+  const pick = x => `data-rmpick="${esc(x.name)}" data-rmset="${esc(x.set)}" data-rmmax="${x.have}"`;
+  return `<div><h2>${esc(who)}'s cards from Round ${ui.poolRound}</h2><p class="small muted">${total} card${total===1?"":"s"} opened, added or picked in Round ${ui.poolRound} and still owned. Click a card to add it to the removal list; click again for another copy.</p></div>
+    <div class="row"><input type="text" id="rmQ" value="${esc(ui.rmQ||"")}" placeholder="Search name or type" style="flex:1;min-width:0" aria-label="Search this round's cards">
+      <label class="opt small"><input type="checkbox" id="rmBasics" ${ui.rmHideBasics?"checked":""}> Hide basic lands</label></div>
+    ${!items.length ? `<div class="empty"><b>No cards from Round ${ui.poolRound}.</b><br>Pick another round on the left.</div>` :
+      ui.images
+        ? `<div class="cgrid">${shown.map(x => `<div class="rmcell ${x.queued?"q":""}">${cardImgHTML(x.name, x.set, {num:x.num, qty:x.have}).replace('<button class="cimgbox', `<button ${pick(x)} class="cimgbox`)}${x.queued ? `<span class="rmq">−${x.queued}</span>` : ""}</div>`).join("") || '<p class="muted">No cards match.</p>'}</div>`
+        : `<div class="tablewrap" style="max-height:560px;overflow:auto"><table><thead><tr><th>Own</th><th>Card</th><th>Set</th><th>Removing</th></tr></thead><tbody>
+          ${shown.map(x => `<tr class="${x.queued?"rmrow-q":""}"><td class="num">${x.have}</td><td><button class="link" ${pick(x)}>${esc(x.name)}</button></td><td class="small muted">${x.set ? x.set.toUpperCase() : "Pool"}</td><td class="num">${x.queued ? `−${x.queued}` : ""}</td></tr>`).join("") || '<tr><td colspan="4" class="muted">No cards match.</td></tr>'}
+          </tbody></table></div>`}`;
+}
+// Add one copy of a card to the removal textarea, merging with an existing line for the same printing.
+function queueRemoval(name, set, max){
+  const lines = ui.poolText.split("\n").filter(l => l.trim());
+  const want = `${NORM(name)}|${set}`;
+  let found = false;
+  const out = lines.map(raw => {
+    const [l] = parseCardLines(raw); if(!l || `${NORM(l.name)}|${l.set}` !== want) return raw;
+    found = true;
+    if(l.qty >= max){ toast(`Only ${max} ${name} from this round`); return raw; }
+    return `${l.qty + 1} ${l.name}${l.set ? ` (${l.set})` : ""}`;
+  });
+  if(!found) out.push(`1 ${name}${set ? ` (${set})` : ""}`);
+  ui.poolText = out.join("\n");
+}
+
 // Sets you can practice with: anything in an unlocked round (admin: every set).
 function simSets(){ return isAdmin() ? SET_ORDER.filter(c => c !== "3ed") : [...new Set(visibleRounds().filter(R => R.n <= unlocked()).flatMap(R => roundSets(R)))]; }
 function doSim(){
@@ -987,6 +1040,7 @@ document.addEventListener("click", async ev => {
   if(t.id==="signIn"){ try { await backend.signIn(); } catch(e){ toast(friendly(e)); } return; }
   if(t.id==="signOut"){ await backend.signOut(); return; }
   if(d.tab) return setTab(d.tab);
+  if(d.rmpick !== undefined){ queueRemoval(d.rmpick, d.rmset || "", +d.rmmax || 1); return renderOpen(); }
   if(d.card) return showCard(d.card, d.set);
   if(d.close){ $("#drawer").hidden = true; return; }
   if(d.player){ if(ui.pending){ toast("Add or reroll the waiting packs first"); return; } ui.player = d.player; ui.lastOpen = null; ui.sel = {}; return renderOpen(); }
@@ -1060,7 +1114,8 @@ document.addEventListener("change", ev => {
   if(t.dataset.choice){ ui.choice[`${ui.round}:${t.dataset.choice}`] = t.value; return renderOpen(); }
   if(t.id==="extraSet"){ ui.extraSet = t.value; return renderOpen(); }
   if(t.id==="extraCount"){ ui.extraCount = Math.max(1, Math.min(60, +t.value||1)); return renderOpen(); }
-  if(t.id==="poolRound"){ ui.poolRound = +t.value; return; }
+  if(t.id==="poolRound"){ ui.poolRound = +t.value; return renderOpen(); }
+  if(t.id==="rmBasics"){ ui.rmHideBasics = t.checked; return renderOpen(); }
   if(t.id==="adjReason"){ ui.adjReason = t.value; return; }
   if(t.id==="simSet"){ ui.simSet = t.value; return renderOpen(); }
   if(t.id==="simCount"){ ui.simCount = Math.max(1, Math.min(20, +t.value||1)); return renderOpen(); }
@@ -1084,7 +1139,8 @@ document.addEventListener("input", ev => {
   if(t.dataset.mix){ ui.mix[`${ui.round}:${t.dataset.mix}`] = +t.value; return keepFocus(renderOpen); }
   if(t.id==="sbQ"){ ui.sb.q = t.value; clearTimeout(ui._sq); ui._sq = setTimeout(()=>keepFocus(renderSets), 180); return; }
   if(t.id==="fq"){ ui.f.q = t.value; clearTimeout(ui._qt); ui._qt = setTimeout(()=>keepFocus(renderCollection), 180); return; }
-  if(t.id==="poolText"){ ui.poolText = t.value; return; }
+  if(t.id==="poolText"){ ui.poolText = t.value; clearTimeout(ui._pt); if(ui.adjMode === "remove") ui._pt = setTimeout(() => keepFocus(renderOpen), 400); return; }
+  if(t.id==="rmQ"){ ui.rmQ = t.value; clearTimeout(ui._rq); ui._rq = setTimeout(() => keepFocus(renderOpen), 180); return; }
   if(t.id==="deckText"){ ui.deckText = t.value; return; }
   if(t.id==="banText"){ ui.banDraft = t.value; return; }
 });

@@ -207,3 +207,7 @@ td.ok{color:var(--good)} td.no{color:var(--muted)}
 .slot.edit{display:flex;flex-direction:column;gap:8px}
 .slot.edit input[type=text]{min-width:0}
 .optrow{background:var(--surface);border-radius:6px;padding:6px 8px}
+.rmcell{position:relative}
+.rmcell.q .cimgbox{box-shadow:0 0 0 3px var(--bad)}
+.rmq{position:absolute;bottom:6px;right:6px;z-index:3;background:var(--bad);color:#fff;font-size:.72rem;font-weight:700;border-radius:4px;padding:1px 6px}
+tr.rmrow-q td{color:var(--bad)}
